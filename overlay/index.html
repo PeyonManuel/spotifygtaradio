@@ -1,0 +1,853 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d12">
+<link rel="icon" href="../icon-192.png">
+<title>GTA Radio Overlay</title>
+<style>
+  :root { --bg:#0d0d12; --fg:#f2efe6; --dim:#8b8a93; --accent:#ffb000; --panel:#17171f; --S:min(100vw,100vh,980px); }
+  @supports (height:100dvh) { :root { --S:min(100vw,100dvh,980px); } }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; background:var(--bg); color:var(--fg); font-family:"Segoe UI",system-ui,sans-serif; }
+  body { min-height:100vh; display:flex; align-items:center; justify-content:center; background:radial-gradient(circle at 50% 42%,#1b1b26 0,#0d0d12 70%); }
+  .screen { width:min(560px,92vw); background:var(--panel); border-radius:16px; padding:28px; display:none; margin:24px 0; }
+  .screen.on { display:block; }
+  .screen.full { width:100%; background:none; padding:0; margin:0; border-radius:0; }
+  .screen.full.on { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; }
+  h1 { margin:0 0 6px; letter-spacing:.12em; color:var(--accent); font-size:28px; }
+  p, li { color:var(--dim); line-height:1.5; font-size:14px; }
+  code { background:#0d0d12; padding:2px 6px; border-radius:4px; color:var(--fg); user-select:all; word-break:break-all; }
+  input[type=text] { width:100%; padding:10px; border-radius:8px; border:1px solid #333; background:#0d0d12; color:var(--fg); font-size:14px; }
+  button { background:var(--accent); color:#111; border:0; padding:10px 18px; border-radius:8px; font-weight:700; cursor:pointer; font-size:14px; margin-top:14px; }
+  button.ghost { background:#262632; color:var(--fg); }
+  button:disabled { opacity:.5; cursor:default; }
+  #plist { max-height:340px; overflow:auto; margin-top:10px; border:1px solid #262632; border-radius:8px; padding:6px; }
+  #plist label { display:flex; gap:8px; align-items:center; padding:4px 6px; font-size:14px; color:var(--fg); cursor:pointer; }
+  #status { color:var(--dim); font-size:13px; margin-top:10px; min-height:18px; }
+  #err { position:fixed; left:0; right:0; bottom:0; background:#5c1a1a; color:#fff; padding:12px 16px; font-size:13px; display:none; z-index:99; white-space:pre-wrap; cursor:pointer; }
+
+  /* ---------- the radio: wheel + player in the middle ---------- */
+  #stage { position:relative; width:var(--S); height:var(--S); container-type:size; flex:none; }
+  #wheel { position:absolute; inset:0; width:100%; height:100%; touch-action:none; user-select:none; -webkit-user-select:none; cursor:pointer; }
+  .st { pointer-events:none; }
+  .st .c { fill:#0d0d12; stroke:none; }
+  .st .lg { opacity:.88; }
+  .st .lg.mono { filter:grayscale(.75); }                      /* idle stations sit at 25% colour */
+  .st .rs, .st .rh { fill:none; stroke:none; }
+  .st.on .rs { stroke:#00b8d4; stroke-width:5; }               /* tuned in: darker cyan ring */
+  .st.hov .lg, .st.on .lg { opacity:1; }
+  .st.hov .lg.mono, .st.on .lg.mono { filter:none; }                            /* hovered: full colour + white ring */
+  .st.hov .rh { stroke:#fff; stroke-width:3; }
+  .st.hov .rs { stroke:none; }
+  .st .un { fill:#fff; opacity:.5; font-size:11px; font-weight:800; letter-spacing:.15em; text-anchor:middle; dominant-baseline:middle; }
+  #radio { --accent:#fff; touch-action:none; }
+  html { overscroll-behavior:none; }
+  .st .in { transform-box:fill-box; transform-origin:center; transition:transform .12s; }
+  @media (hover:none) and (pointer:coarse) { .st.hov .in { transform:scale(1.6); } }   /* phones only: the pointed station swells up so your finger doesn't hide it */
+  #hprev { display:none; }
+  #np { display:none; text-align:center; max-width:92vw; padding:4px 14px 0; }
+  #npTrack { font-weight:700; font-size:clamp(16px,5vw,24px); line-height:1.25; }
+  #npArtist { color:var(--dim); font-size:clamp(13px,3.8vw,18px); line-height:1.35; margin-top:.15em; min-height:1.35em; }
+  #handle { position:fixed; left:50%; transform:translateX(-50%); bottom:0; width:140px; height:30px; z-index:19; cursor:pointer; transition:opacity .3s; }
+  #handle::after { content:""; position:absolute; left:50%; bottom:calc(9px + env(safe-area-inset-bottom)); transform:translateX(-50%); width:56px; height:5px; border-radius:3px; background:#ffffff45; }
+  #foot:not(.away) ~ #handle { opacity:0; pointer-events:none; }
+  #foot { padding-bottom:calc(8px + env(safe-area-inset-bottom)) !important; }
+  @media (max-aspect-ratio:4/5) {                              /* portrait phones: song info moves under the wheel */
+    :root { --S:min(100vw,calc(100vh - 130px),980px); }
+    #np { display:block; min-height:78px; }
+    #htrack, #hartist { display:none !important; }
+  }
+  @supports (height:100dvh) { @media (max-aspect-ratio:4/5) { :root { --S:min(100vw,calc(100dvh - 130px),980px); } } }
+
+
+  #hub { position:absolute; left:50%; top:50%; width:52%; height:52%; transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; pointer-events:none; }
+  #hlogo { flex:none; aspect-ratio:1; object-fit:cover; width:clamp(64px,19cqw,190px); height:clamp(64px,19cqw,190px); border-radius:50%; margin-bottom:.5em; box-shadow:0 0 0 3px #fff, 0 0 24px #ffffff50; }
+  #hlogo[hidden] { display:block; visibility:hidden; }   /* keep its space so nothing jumps when a station appears */
+  #hfam { display:none; }
+  @container (max-width:560px) { #hlogo { width:13cqw; height:13cqw; } #hprev { margin-top:.4em; } #hartist { margin-top:.1em; } #xx { min-width:0; min-height:0; margin-bottom:.4em; } }
+  #hfam { font-size:clamp(9px,1.5cqw,16px); letter-spacing:.25em; color:var(--dim); text-transform:uppercase; min-height:1.3em; }
+  #hname { font-size:clamp(14px,3.2cqw,32px); line-height:1.25; flex:none; font-weight:800; color:var(--accent); line-height:1.1; margin:.2em 0 .5em; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; height:2.2em; overflow-wrap:anywhere; }
+  #htrack { height:2.4em; overflow-wrap:anywhere; font-size:clamp(12px,2.5cqw,26px); font-weight:600; line-height:1.2; max-width:100%; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  #pp, #hprev { flex:none; } #hartist { line-height:1.35; min-height:1.35em; flex:none; } #htrack { flex:none; }
+  #hartist { font-size:clamp(10px,2cqw,21px); color:var(--dim); margin-top:.3em; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #pp { pointer-events:auto; background:none; margin:0; padding:.2em; border-radius:50%; font-size:clamp(14px,2.4cqw,24px); line-height:1; filter:grayscale(1) brightness(1.7); cursor:pointer; }
+  #volwrap #pp.muted { filter:grayscale(1) brightness(1.6) opacity(.6); }
+  #volwrap { pointer-events:auto; flex:none; display:flex; align-items:center; gap:.7em; width:46%; margin-top:1em; font-size:clamp(10px,1.6cqw,16px); opacity:.55; transition:opacity .2s; }
+  #volwrap:hover, #volwrap:focus-within { opacity:1; }
+  #volwrap span, #volwrap #pp { font-size:clamp(14px,2.2cqw,22px); width:1.7em; height:1.7em; display:flex; align-items:center; justify-content:center; padding:0; line-height:1; flex:none; filter:grayscale(1) brightness(1.6); }
+  #volwrap input { -webkit-appearance:none; appearance:none; flex:1; min-width:0; height:max(3px,.5cqw); border-radius:3px; background:#ffffff30; outline:none; margin:0; cursor:pointer; width:auto !important; }
+  #volwrap input::-webkit-slider-thumb { -webkit-appearance:none; width:max(12px,1.9cqw); height:max(12px,1.9cqw); border-radius:50%; background:#fff; box-shadow:0 0 8px #ffffff80; border:0; }
+  #volwrap input::-moz-range-thumb { width:max(12px,1.9cqw); height:max(12px,1.9cqw); border-radius:50%; background:#fff; border:0; box-shadow:0 0 8px #ffffff80; }
+  #hprev { font-size:clamp(12px,1.7cqw,17px); color:var(--fg); min-height:1.4em; margin-top:.9em; }
+
+  #foot { position:fixed; left:0; right:0; bottom:0; z-index:20; background:linear-gradient(transparent,#0d0d12ee 40%); padding-top:28px !important; transition:opacity .3s, transform .3s; display:flex; gap:8px; flex-wrap:wrap; justify-content:center; align-items:center; padding:8px 12px; min-height:64px; font-size:13px; color:var(--dim); max-width:100%; }
+  #foot select { background:#17171f; color:var(--fg); border:1px solid #333; border-radius:8px; padding:7px 8px; font-size:13px; max-width:46vw; }
+  #foot button.mini { margin:0; padding:7px 10px; font-size:12px; background:#262632; color:var(--fg); }
+  #foot input[type=range] { width:90px; vertical-align:middle; accent-color:var(--accent); }
+  #ovBtn[hidden] { display:none; }
+  /* overlay mode (loaded by the Android app on top of other apps): only the wheel, dimmed background, fades in/out */
+  html.ov, html.ov body { background:transparent !important; touch-action:none; overflow:hidden; }
+  html.ov #foot, html.ov #handle, html.ov #np, html.ov #volwrap, html.ov #hprev, html.ov #hfam, html.ov #err, html.ov #htrack, html.ov #hartist { display:none !important; }
+  html.ov { --S:min(100vw,100vh,980px); }
+  html.ov .screen.full.on { background:rgba(4,4,8,.72); opacity:0; transition:opacity .18s; width:100vw; min-height:100vh; height:100vh; }
+  html.ov.open .screen.full.on { opacity:1; }
+  html.ov #stage { filter:drop-shadow(0 0 30px #000); }
+  #foot.away { opacity:0; transform:translateY(100%); pointer-events:none; }
+  #st { flex-basis:100%; text-align:center; min-height:1.2em; }
+  @container (max-width:560px) { @media (max-aspect-ratio:4/5) { #hlogo { width:26cqw; height:26cqw; } } }
+</style>
+</head>
+<body>
+
+<div id="err" title="Tap to dismiss"></div>
+
+<!-- LOADING -->
+<div class="screen on" id="s-load">
+  <h1>GTA SPOTIFY RADIO</h1>
+  <p id="loadmsg">Loading…</p>
+</div>
+
+<!-- SETUP -->
+<div class="screen" id="s-setup">
+  <h1>GTA SPOTIFY RADIO</h1>
+  <p>Your Spotify genre playlists as radio stations. Each one keeps "playing" while you're on another, so tuning in drops you mid-song.</p>
+  <ol>
+    <li>Go to <code>developer.spotify.com/dashboard</code> and create an app. Tick <b>Web Playback SDK</b> and <b>Web API</b>.</li>
+    <li>Add this exact Redirect URI: <code id="redir"></code></li>
+    <li>Paste the app's Client ID here:</li>
+  </ol>
+  <input type="text" id="cid" placeholder="Client ID">
+  <button id="login">Log in with Spotify</button>
+  <p>Needs Spotify Premium.</p>
+</div>
+
+<!-- PICK PLAYLISTS (only if none of your genre playlists are found, or via "Change playlists") -->
+<div class="screen" id="s-pick">
+  <h1>STATIONS</h1>
+  <p>Choose which playlists become stations.</p>
+  <button class="ghost" id="all">All</button> <button class="ghost" id="none">None</button> <button class="ghost" id="mine">Only mine</button> <button class="ghost" id="mine30">My 30 genres</button>
+  <div id="plist"></div>
+  <button id="build">Build radio</button>
+  <div id="status"></div>
+</div>
+
+<!-- RADIO -->
+<div class="screen full" id="radio">
+  <div id="stage">
+    <svg id="wheel" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="hub">
+      <img id="hlogo" alt="" hidden>
+      <div id="hfam"></div>
+      <div id="hname">GTA SPOTIFY RADIO</div>
+      <div id="htrack">Tap a station to tune in</div>
+      <div id="hartist"></div>
+      <label id="volwrap" title="Volume"><button id="pp" type="button" title="Mute (Space)">&#128265;</button><input id="vol" type="range" min="0" max="1" step="0.01"><span>&#128266;</span></label>
+      <div id="hprev"></div>
+    </div>
+  </div>
+  <div id="np"><div id="npTrack"></div><div id="npArtist"></div></div>
+  <div id="foot">
+    <select id="dev" title="Play on"></select>
+    <button class="mini" id="devRef" title="Refresh devices">&#8635;</button>
+    <button class="mini" id="refPl">Refresh playlists</button>
+    <button class="mini" id="chPl">Change playlists</button>
+    <button class="mini" id="ovBtn" hidden>Overlay</button>
+    <button class="mini" id="out">Sign out</button>
+    <span id="st"></span>
+  </div>
+  <div id="handle" title="Menu"></div>
+</div>
+
+<script>window.onSpotifyWebPlaybackSDKReady=function(){ window.__sdkReady=true; if(window.__sdkInit) window.__sdkInit(); };</script>
+<script src="https://sdk.scdn.co/spotify-player.js" async></script>
+<script>
+"use strict";
+/* ---------- config / helpers ---------- */
+const SCOPES = "streaming user-read-email user-read-private playlist-read-private playlist-read-collaborative user-modify-playback-state user-read-playback-state";
+const PAGE = location.origin + location.pathname;
+// Inside the Android app, login happens in Chrome (so "Continue with Google" works) and comes back through this app link.
+const NATIVE = !!window.GtaNative;     // set by the Android app's own WebView
+const REDIRECT = NATIVE ? "gtaoverlay://callback" : PAGE;
+const OVERLAY = new URLSearchParams(location.search).get("overlay")==="1";   // the wheel shown on top of other apps
+if(OVERLAY) document.documentElement.classList.add("ov");
+const EPOCH = Date.UTC(2020, 0, 1);               // shared "station start" clock
+const LAG = 350;                                   // ms it takes Spotify to start a track after we ask
+const MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const $ = id => document.getElementById(id);
+const LS = {
+  get:(k,d)=>{ try{ const v=localStorage.getItem(k); return v===null?d:JSON.parse(v); }catch{ return d; } },
+  set:(k,v)=>{ try{ localStorage.setItem(k,JSON.stringify(v)); return true; }catch{ return false; } },
+  del:k=>{ try{ localStorage.removeItem(k); }catch{} }
+};
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+const fmt = ms => { const s=Math.max(0,Math.floor(ms/1000)); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); };
+function show(id){ document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on")); $(id).classList.add("on"); }
+function showErr(m){ const e=$("err"); e.textContent=String(m); e.style.display="block"; console.error(m); }
+function setStatus(m){ $("st").textContent=m||""; }
+$("err").onclick=()=>{ $("err").style.display="none"; };
+addEventListener("error",e=>showErr("Error: "+e.message));
+addEventListener("unhandledrejection",e=>showErr("Error: "+((e.reason&&e.reason.message)||e.reason)));
+
+/* ---------- auth (PKCE, no secret needed) ---------- */
+const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+async function login(){
+  const cid = $("cid").value.trim(); if(!cid) return alert("Paste your Client ID first.");
+  LS.set("cid", cid);
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
+  const challenge = b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+  sessionStorage.setItem("verifier", verifier); LS.set("verifier", verifier);
+  const url = "https://accounts.spotify.com/authorize?" + new URLSearchParams({
+    client_id:cid, response_type:"code", redirect_uri:REDIRECT, scope:SCOPES,
+    code_challenge_method:"S256", code_challenge:challenge });
+  if(NATIVE){ try{ GtaNative.openLogin(url); return; }catch(e){ showErr("Couldn't open the login page: "+e.message); } }
+  location.href = url;
+}
+async function tokenRequest(params){
+  const r = await fetch("https://accounts.spotify.com/api/token", { method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:new URLSearchParams({ client_id:LS.get("cid"), ...params }) });
+  const j = await r.json(); if(!r.ok) throw new Error(j.error_description||j.error);
+  LS.set("tok", { access:j.access_token, refresh:j.refresh_token || (LS.get("tok")||{}).refresh, exp:Date.now()+j.expires_in*1000-60000 });
+}
+async function getToken(){
+  const t = LS.get("tok"); if(!t) throw new Error("not logged in");
+  if(Date.now() > t.exp) await tokenRequest({ grant_type:"refresh_token", refresh_token:t.refresh });
+  return LS.get("tok").access;
+}
+async function api(method, path, body){
+  for(let attempt=0; attempt<3; attempt++){
+    const r = await fetch(path.startsWith("http")?path:"https://api.spotify.com/v1"+path, { method,
+      headers:{ Authorization:"Bearer "+await getToken(), ...(body?{"Content-Type":"application/json"}:{}) },
+      body: body?JSON.stringify(body):undefined });
+    if(r.status===429){ await sleep((+r.headers.get("Retry-After")||1)*1000+200); continue; }
+    if(r.status===204) return null;
+    const txt = await r.text(); const j = txt?JSON.parse(txt):null;
+    if(!r.ok){ const e=new Error((j&&j.error&&j.error.message)||r.statusText); e.status=r.status; throw e; }
+    return j;
+  }
+  throw new Error("rate limited");
+}
+
+/* ---------- the genre set: your 30 playlists, ordered, grouped by "Family - Subgenre" ---------- */
+const ORDER = [
+  "Rock - Classic","Rock - Grunge & Britpop","Rock - Indie","Rock - Dream Pop, Shoegaze & Slowcore","Rock - Post-Rock & Ambient","Rock - Progressive & Psychedelic","Rock - Punk & Post-Punk","Rock - Emo & Pop Punk",
+  "Metal - Heavy & Hard Rock","Metal - Nu & Industrial","Metal - Hardcore & Metalcore","Metal - Death, Black, Thrash & Doom",
+  "Hip-Hop - Boom Bap","Hip-Hop - Pop Rap & West Coast","Hip-Hop - Trap & Experimental",
+  "Reggaeton & Latin Trap","R&B & Neo-Soul","Reggae, Soul & Funk","Pop & Hyperpop","New Wave & Synth-Pop",
+  "Electronic - House, Techno & Trance","Electronic - EDM & Future Bass","Electronic - Trip-Hop",
+  "J-Rock & J-Pop","Bossa Nova & MPB","Jazz","Blues, Country & Roots","Singer-Songwriter & Folk","Classical & Orchestral","Unsorted"
+];
+// station names + logo numbers (logos/NN.png) for each playlist
+const STATIONS = {
+  "Rock - Classic":["The Stone 98.7",1],"Rock - Grunge & Britpop":["Flannel FM",2],"Rock - Indie":["Tote Bag 104.6",3],
+  "Rock - Dream Pop, Shoegaze & Slowcore":["Static Dreams 87.9",4],"Rock - Post-Rock & Ambient":["The Long Build",5],
+  "Rock - Progressive & Psychedelic":["Third Eye 106.6",6],"Rock - Punk & Post-Punk":["Safety Pin Radio",7],"Rock - Emo & Pop Punk":["Mall Rat 92.3",8],
+  "Metal - Heavy & Hard Rock":["Amp Eleven",9],"Metal - Nu & Industrial":["Steel Mill 106",10],"Metal - Hardcore & Metalcore":["Breakdown 97.1",11],
+  "Metal - Death, Black, Thrash & Doom":["Grave 66.6",12],"Hip-Hop - Boom Bap":["Dusty Crates 95.4",13],"Hip-Hop - Pop Rap & West Coast":["Hydraulics 102.5",14],
+  "Hip-Hop - Trap & Experimental":["Ghost Signal 808",15],"Reggaeton & Latin Trap":["Radio Perreo 100.1",16],"R&B & Neo-Soul":["Velvet 89.3",17],
+  "Reggae, Soul & Funk":["Bassline Sunshine 91.5",18],"Pop & Hyperpop":["Sugar Crash 100",19],"New Wave & Synth-Pop":["Shoulder Pad 83.0",20],
+  "Electronic - House, Techno & Trance":["4AM Warehouse",21],"Electronic - EDM & Future Bass":["Drop Zone 128",22],"Electronic - Trip-Hop":["Bristol Fog 90.7",23],
+  "J-Rock & J-Pop":["Shinkansen 77.7",24],"Bossa Nova & MPB":["Rádio Saudade 88.8",25],"Jazz":["The Late Set 101.9",26],
+  "Blues, Country & Roots":["Rattlesnake 96.1",27],"Singer-Songwriter & Folk":["Campfire 94.0",28],"Classical & Orchestral":["Grand Opus 107.7",29]
+};
+const LOGO_MONO = true;   // true = logos are grey until tuned in (then full colour); false = always colour
+const stInfo = st => { const m=STATIONS[st.name]; return m?{name:m[0],logo:m[1]}:{name:st.sub||st.name,logo:0}; };
+function splitName(n){ const m=n.match(/^(.+?)\s+-\s+(.+)$/); return m?{family:m[1].trim(),sub:m[2].trim()}:{family:null,sub:n}; }
+function orderAndGroup(list){
+  const idx=n=>{ const i=ORDER.indexOf(n); return i<0?1e6:i; };
+  list.sort((a,b)=>idx(a.name)-idx(b.name)||a.name.localeCompare(b.name));
+  const count={}; list.forEach(s=>{ const f=splitName(s.name).family; if(f) count[f]=(count[f]||0)+1; });
+  const buckets=[], byFam={};
+  list.forEach(s=>{
+    const sp=splitName(s.name), fam=(sp.family&&count[sp.family]>1)?sp.family:null;
+    s.family=fam; s.sub=fam?sp.sub:s.name;
+    if(fam){ if(!byFam[fam]){ byFam[fam]=[]; buckets.push(byFam[fam]); } byFam[fam].push(s); }
+    else buckets.push([s]);
+  });
+  return buckets.flat();
+}
+// Only playlists whose names are in ORDER. If a name exists twice (copies in other folders), keep the longest one.
+function pickGenre(pls){
+  const best=new Map();
+  pls.forEach(p=>{
+    if(!ORDER.includes(p.name)) return;
+    const n=(p.tracks&&p.tracks.total)||(p.items&&p.items.total)||0, o=best.get(p.name);
+    if(!o||n>o.n) best.set(p.name,{p,n});
+  });
+  return [...best.values()].map(x=>x.p);
+}
+
+/* ---------- playlists + tracks ---------- */
+let me=null, playlists=[], stations=[];
+const boxes=()=>[...document.querySelectorAll("#plist input")];
+async function loadPlaylists(){
+  me = await api("GET","/me");
+  let url="/me/playlists?limit=50"; playlists=[];
+  while(url){ const j=await api("GET",url); playlists.push(...j.items.filter(Boolean)); url=j.next; }
+  const genre=new Set(pickGenre(playlists).map(p=>p.id)), useGenre=genre.size>0;
+  const list=$("plist"); list.innerHTML="";
+  playlists.forEach(p=>{
+    const l=document.createElement("label");
+    const cb=document.createElement("input"); cb.type="checkbox"; cb.value=p.id; cb.dataset.owner=p.owner&&p.owner.id;
+    cb.checked = useGenre ? genre.has(p.id) : true;
+    l.append(cb, document.createTextNode(p.name)); list.append(l);
+  });
+}
+$("all").onclick=()=>boxes().forEach(b=>b.checked=true);
+$("none").onclick=()=>boxes().forEach(b=>b.checked=false);
+$("mine").onclick=()=>boxes().forEach(b=>b.checked=(b.dataset.owner===me.id));
+$("mine30").onclick=()=>{ const g=new Set(pickGenre(playlists).map(p=>p.id)); boxes().forEach(b=>b.checked=g.has(b.value)); };
+
+async function fetchTracks(pl){
+  // Spotify has been renaming /tracks -> /items; try the new one first, fall back.
+  const fields = "next,items(item(uri,name,type,is_local,is_playable,duration_ms,artists(name)),track(uri,name,type,is_local,is_playable,duration_ms,artists(name)))";
+  let out=[];
+  for(const base of ["items","tracks"]){
+    try{
+      out=[]; let url=`/playlists/${pl.id}/${base}?limit=100&market=from_token&fields=${encodeURIComponent(fields)}`;
+      while(url){ const j=await api("GET",url); for(const it of j.items){ const t=it.item||it.track; if(t&&t.uri&&!t.is_local&&t.is_playable!==false&&t.type!=="episode"&&t.duration_ms) out.push({uri:t.uri,name:t.name,artist:(t.artists||[]).map(a=>a.name).join(", "),dur:t.duration_ms}); } url=j.next; }
+      return out;
+    }catch(e){ if(base==="tracks") throw e; }
+  }
+  return out;
+}
+
+/* seeded shuffle so each station has a stable, non-alphabetical running order */
+function hash(s){ let h=1779033703^s.length; for(let i=0;i<s.length;i++){ h=Math.imul(h^s.charCodeAt(i),3432918353); h=h<<13|h>>>19; } return h>>>0; }
+function rng(seed){ return ()=>{ seed|=0; seed=seed+0x6D2B79F5|0; let t=Math.imul(seed^seed>>>15,1|seed); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+function shuffled(arr,seedStr){ const a=arr.slice(), r=rng(hash(seedStr)); for(let i=a.length-1;i>0;i--){ const j=Math.floor(r()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+
+/* the station list is cached so the radio opens instantly next time */
+function saveCache(){
+  const ok=LS.set("cache3",{t:Date.now(),list:stations.map(s=>({id:s.id,name:s.name,tr:s.tracks.map(t=>[t.uri,t.name,t.artist,t.dur])}))});
+  if(!ok) console.warn("station cache too large, skipped");
+}
+function loadCache(){
+  const c=LS.get("cache3",null);
+  if(!c||!c.list||!c.list.length||Date.now()-c.t>12*3600e3) return null;
+  try{ return c.list.map(s=>{ const tracks=s.tr.map(a=>({uri:a[0],name:a[1],artist:a[2],dur:a[3]})); return {id:s.id,name:s.name,tracks,total:tracks.reduce((x,t)=>x+t.dur,0)}; }); }
+  catch{ return null; }
+}
+
+async function buildRadio(ids, say){
+  stations=[];
+  for(let i=0;i<ids.length;i++){
+    const pl=playlists.find(p=>p.id===ids[i]); if(!pl) continue;
+    say(`Loading ${i+1}/${ids.length}: ${pl.name}`);
+    try{
+      const tr=await fetchTracks(pl);
+      if(tr.length){ const s=shuffled(tr,pl.id); stations.push({id:pl.id,name:pl.name,tracks:s,total:s.reduce((a,t)=>a+t.dur,0)}); }
+    }catch(e){ console.warn("skip",pl.name,e); say(`Skipped ${pl.name}: ${e.message}`); await sleep(800); }
+  }
+  if(!stations.length){ say("No playable tracks found."); return false; }
+  stations=orderAndGroup(stations);
+  saveCache();
+  enterRadio();
+  return true;
+}
+$("build").onclick=async ()=>{
+  const ids=boxes().filter(b=>b.checked).map(b=>b.value);
+  if(!ids.length) return alert("Pick at least one playlist.");
+  history.replaceState({},"",location.pathname);
+  $("build").disabled=true;
+  await buildRadio(ids, m=>$("status").textContent=m);
+  $("build").disabled=false;
+};
+
+/* ---------- the radio clock ---------- */
+function onAir(st, at=Date.now()){
+  let t=(at-EPOCH)%st.total, i=0;
+  while(t>=st.tracks[i].dur){ t-=st.tracks[i].dur; i++; }
+  return { idx:i, offset:t, track:st.tracks[i] };
+}
+
+/* ---------- playback: in this browser (desktop) or on a Spotify device (phone, speaker, ...) ---------- */
+let player=null, sdkId=null, sdkOK=false, sdkStarted=false, inited=false;
+let devices=[], devId=null, current=null, lastTune=0, paused=false, lastUri=null, queueEnd=Infinity, misses=0;
+const target=()=>devId==="sdk"?sdkId:devId;
+
+function startPlayer(){
+  if(sdkStarted) return; sdkStarted=true;
+  if(MOBILE){ setStatus("Phone: audio plays through your Spotify app. Open Spotify once, pick this phone in the list, then tap a station."); return; }
+  const init=()=>{
+    if(inited) return; inited=true;
+    try{ player=new Spotify.Player({ name:"GTA Spotify Radio", getOAuthToken:cb=>getToken().then(cb), volume:LS.get("vol",.8) }); }
+    catch(e){ setStatus("This browser can't play audio itself. Pick a Spotify device below."); return; }
+    player.addListener("ready",({device_id})=>{ sdkId=device_id; sdkOK=true; refreshDevices(); setStatus("Ready. Tap a station."); });
+    player.addListener("not_ready",()=>{ sdkOK=false; });
+    player.addListener("player_state_changed",s=>{
+      if(!noise||!s||s.paused) return;
+      const c=s.track_window&&s.track_window.current_track;
+      if((c&&(c.uri===expectUri||(c.linked_from&&c.linked_from.uri===expectUri)))||(s.position>200&&Date.now()-lastTune>1500)) stopStatic();
+    });
+    player.addListener("initialization_error",e=>{ setStatus("This browser can't play audio itself ("+e.message+"). Pick a Spotify device below."); refreshDevices(); });
+    player.addListener("authentication_error",e=>setStatus("Auth error: "+e.message));
+    player.addListener("account_error",e=>setStatus("Premium account required: "+e.message));
+    player.addListener("playback_error",e=>setStatus("Playback error: "+e.message));
+    player.connect();
+  };
+  window.__sdkInit=init;
+  if(window.Spotify||window.__sdkReady) init();
+}
+
+async function refreshDevices(){
+  try{ const j=await api("GET","/me/player/devices"); devices=(j&&j.devices)||[]; }
+  catch(e){ devices=[]; setStatus("Couldn't list devices: "+e.message); }
+  const sel=$("dev"); sel.innerHTML="";
+  const opts=[];
+  if(sdkOK&&sdkId) opts.push({v:"sdk",name:"This browser"});
+  devices.filter(d=>d.id!==sdkId&&!d.is_restricted).forEach(d=>opts.push({v:d.id,name:d.name+(d.is_active?" (active)":"")}));
+  if(!opts.length){ sel.innerHTML='<option value="">No device found: open Spotify on your phone</option>'; devId=null; updateVolUI(); return; }
+  opts.forEach(o=>{ const e=document.createElement("option"); e.value=o.v; e.textContent=o.name; sel.append(e); });
+  const want=LS.get("dev",null), act=devices.find(d=>d.is_active&&d.id!==sdkId);
+  const pick=opts.find(o=>o.v===want)||opts.find(o=>o.v==="sdk")||(act&&opts.find(o=>o.v===act.id))||opts[0];
+  sel.value=pick.v; devId=pick.v; updateVolUI();
+}
+$("dev").onchange=()=>{ devId=$("dev").value||null; LS.set("dev",devId); updateVolUI(); if(current!==null&&devId) tune(current); };
+$("devRef").onclick=refreshDevices;
+function updateVolUI(){ $("volwrap").style.display="flex"; }
+$("vol").value=LS.get("vol",.8);
+$("vol").oninput=()=>{ const v=+$("vol").value; LS.set("vol",v); if(muted){ muted=false; updatePP(); } if(player&&devId==="sdk") player.setVolume(v); else { clearTimeout(volT); volT=setTimeout(applyVolume,150); } };
+let volT=null;
+
+/* radio static: loops from the moment you tune until the song actually starts playing */
+let actx=null, nbuf=null, noise=null, tuneSeq=0, expectUri=null;
+function noiseBuffer(){
+  if(nbuf&&nbuf.sampleRate===actx.sampleRate) return nbuf;
+  const sr=actx.sampleRate, len=sr*3, buf=actx.createBuffer(1,len,sr), d=buf.getChannelData(0), seg=Math.floor(sr/40);
+  let env=.6;
+  for(let i=0;i<len;i++){
+    if(i%seg===0) env=.45+Math.random()*.55;                 // crackly level changes about 40 times a second
+    let v=(Math.random()*2-1)*env;
+    if(Math.random()<.0004) v*=2.5;                           // the odd pop
+    d[i]=Math.max(-1,Math.min(1,v));
+  }
+  return (nbuf=buf);
+}
+/* GTA-style dial sweep: a quick tuning whoosh with a couple of blips (synthesised, no copyrighted audio).
+   Drop your own short clip next to the page as switch.mp3 and it will be used instead. */
+let switchBuf=null, switchState="idle";      // idle -> loading -> ready | missing
+const decodeAny=ab=>new (window.OfflineAudioContext||window.webkitOfflineAudioContext)(2,1,44100).decodeAudioData(ab);   // decoding needs no user gesture
+async function loadSwitchFile(){
+  if(switchState!=="idle") return; switchState="loading";
+  try{ const r=await fetch("../switch.mp3"); if(!r.ok) throw 0; switchBuf=await decodeAny(await r.arrayBuffer()); switchState="ready"; }catch{ switchState="missing"; }
+}
+loadSwitchFile();
+let sw=null;
+function fadeSwitch(wait,dur){
+  dur=dur||.25;
+  const x=sw; if(!x) return; sw=null;
+  setTimeout(()=>{ try{ const t=actx.currentTime; x.g.gain.cancelScheduledValues(t); x.g.gain.setValueAtTime(x.g.gain.value,t); x.g.gain.linearRampToValueAtTime(0,t+dur); x.s.stop(t+dur+.05); }catch{} },wait||0);
+}
+function switchSound(){
+  try{
+    actx=actx||new (window.AudioContext||window.webkitAudioContext)();
+    if(actx.state==="suspended") actx.resume();
+    loadSwitchFile();
+    const t=actx.currentTime;
+    fadeSwitch(0,.05);                                    // a new tune cuts the previous clip, so they never overlap
+    if(!switchBuf&&switchState=="loading") return 0;      // the real clip is about to be ready: never play the stand-in
+    if(switchBuf){                                       // your clip: it IS the radio-tuning noise until the song starts
+      const s=actx.createBufferSource(); s.buffer=switchBuf; const g=actx.createGain(); g.gain.value=.85; s.connect(g).connect(actx.destination); s.start();
+      sw={s,g}; s.onended=()=>{ if(sw&&sw.s===s) sw=null; };
+      return Math.round(switchBuf.duration*1000)-60;
+    }
+    // quick radio "chk": a tiny noise snap + a fast falling blip, ~90 ms total
+    const src=actx.createBufferSource(); src.buffer=noiseBuffer(); src.loop=true;
+    const f=actx.createBiquadFilter(); f.type="highpass"; f.frequency.value=1800;
+    const g=actx.createGain(); g.gain.setValueAtTime(.7,t); g.gain.exponentialRampToValueAtTime(.001,t+.07);
+    src.connect(f).connect(g).connect(actx.destination); src.start(t); src.stop(t+.08);
+    const o=actx.createOscillator(); o.type="triangle";
+    o.frequency.setValueAtTime(1500,t); o.frequency.exponentialRampToValueAtTime(420,t+.09);
+    const og=actx.createGain(); og.gain.setValueAtTime(.22,t); og.gain.exponentialRampToValueAtTime(.001,t+.1);
+    o.connect(og).connect(actx.destination); o.start(t); o.stop(t+.11);
+  }catch{}
+  return 0;
+}
+/* hover tick (your GTA UI clip). Rate-limited to roughly what a controller stick can do, so sliding around can't spam it. */
+let hoverBuf=null, hoverTried=false, lastTick=0;
+const TICK_GAP=140;   // ms between ticks
+async function loadHover(){
+  if(hoverTried) return; hoverTried=true;
+  try{ const r=await fetch("../hover.wav"); if(r.ok) hoverBuf=await decodeAny(await r.arrayBuffer()); }catch{}
+}
+loadHover();
+function audioInit(){ try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==="suspended") actx.resume(); loadHover(); loadSwitchFile(); }catch{} }
+["pointerdown","keydown","touchstart"].forEach(ev=>addEventListener(ev,audioInit,{passive:true}));
+function playTick(){
+  try{ const s=actx.createBufferSource(); s.buffer=hoverBuf; const g=actx.createGain(); g.gain.value=1; s.connect(g).connect(actx.destination); s.start(); }catch{}
+}
+function hoverTick(){
+  const now=performance.now(); if(now-lastTick<TICK_GAP) return;
+  if(!actx) audioInit();                                   // works with no station tuned yet
+  if(!actx||!hoverBuf) return;
+  if(actx.state!=="running"){                              // browsers keep sound locked until your first click/key; try to unlock
+    actx.resume().then(()=>{ if(actx.state==="running"&&hot>=0&&performance.now()-lastTick>=TICK_GAP){ lastTick=performance.now(); playTick(); } }).catch(()=>{});
+    return;
+  }
+  lastTick=now; playTick();
+}
+function startStatic(delay){
+  try{
+    actx=actx||new (window.AudioContext||window.webkitAudioContext)();
+    if(actx.state==="suspended") actx.resume();
+    if(noise){ const o=noise; noise=null; clearTimeout(o.timer); try{ if(o.src){ o.g.gain.value=0; o.src.stop(); } }catch{} }
+    const me={src:null,g:null,t:Date.now()}; noise=me;
+    me.timer=setTimeout(()=>stopStatic(),7000);                             // never leave it hissing forever
+    const go=()=>{ if(noise!==me) return; try{
+      const src=actx.createBufferSource(); src.buffer=noiseBuffer(); src.loop=true;
+      const f=actx.createBiquadFilter(); f.type="bandpass"; f.frequency.value=2400; f.Q.value=.5;
+      const g=actx.createGain(); g.gain.value=0; g.gain.linearRampToValueAtTime(.3,actx.currentTime+.15);
+      src.connect(f).connect(g).connect(actx.destination); src.start(); me.src=src; me.g=g;
+    }catch{} };
+    if(delay>0) setTimeout(go,delay); else go();                             // with your switch clip, the hiss only takes over after the clip ends
+  }catch{}
+}
+function stopStatic(now){
+  const n=noise; if(!n){ fadeSwitch(0); return; } noise=null; clearTimeout(n.timer);
+  const wait=now?0:Math.max(0,700-(Date.now()-n.t));                       // always at least a short burst
+  fadeSwitch(wait);
+  setTimeout(()=>{ try{ if(!n.src) return;
+    const t=actx.currentTime; n.g.gain.cancelScheduledValues(t); n.g.gain.setValueAtTime(n.g.gain.value,t);
+    n.g.gain.linearRampToValueAtTime(0,t+.3); n.src.stop(t+.35);
+  }catch{} }, wait);
+}
+// phone / speaker mode: poll Spotify until the new song is really playing
+async function waitForStart(uri,seq){
+  const t0=Date.now();
+  while(noise&&seq===tuneSeq&&Date.now()-t0<12000){
+    try{ const d=await api("GET","/me/player"); if(d&&d.is_playing&&d.item&&(d.item.uri===uri||(d.item.linked_from&&d.item.linked_from.uri===uri)||(d.progress_ms>1500&&Date.now()-t0>2500))){ stopStatic(); return; } }catch{}
+    await sleep(400);
+  }
+}
+
+/* Tuning is split in two so mashing the wheel can't break anything:
+   1) instantly: the screen, the sounds and the "current station" follow every click;
+   2) the actual Spotify request is debounced and sent one at a time, always for the LATEST station, with fresh on-air timing. */
+let pending=null, sendTimer=null, sending=false, lastSend=0, modeSet=null;
+const TUNE_DEBOUNCE=280, TUNE_MIN_GAP=450;
+function tune(i,opts){
+  const quiet=!!(opts&&opts.quiet);      // quiet = silent re-sync: no static, no change on screen
+  const dev=target();
+  if(!dev){ wakeAndRetune(i); return; }                      // no Spotify device known: look again, and open the Spotify app if needed
+  if(devId==="sdk"&&player){ try{ player.activateElement(); }catch{} }
+  current=i; lastTune=Date.now(); misses=0; if(muted) setTimeout(applyVolume,600); publishCur();
+  if(!quiet){ expectUri=null; const sd=switchSound(); startStatic(sd); markOn(); showStation(); lastUri=null; }
+  pending={i,quiet:quiet&&(!pending||pending.quiet)};     // a real tune always wins over a quiet re-sync
+  clearTimeout(sendTimer); sendTimer=setTimeout(pump,quiet?0:TUNE_DEBOUNCE);
+}
+/* No device to play on (Spotify app closed): open the Spotify app, wait for it to show up, then tune. */
+let waking=false, wakeWant=null, lastWake=0;
+function wakeSpotify(){ try{ (window.GtaNative||window.GtaOverlayHost).openSpotify(); }catch{} }
+async function wakeAndRetune(i){
+  wakeWant=i; if(waking) return; waking=true;
+  try{
+    await refreshDevices(); if(target()){ tune(wakeWant); return; }
+    lastWake=Date.now(); wakeSpotify(); setStatus("Opening Spotify…");
+    for(let k=0;k<20&&!target();k++){ await sleep(1000); await refreshDevices(); }
+    if(target()) tune(wakeWant); else setStatus("Spotify didn't show up. Open it, then tap a station.");
+  } finally { waking=false; }
+}
+async function pump(){
+  if(sending) return;                                      // the running loop will pick up whatever is pending
+  sending=true;
+  try{
+    while(pending){
+      const wait=TUNE_MIN_GAP-(Date.now()-lastSend); if(wait>0) await sleep(wait);
+      const p=pending; pending=null; lastSend=Date.now();
+      await sendTune(p.i,p.quiet);
+    }
+  } finally { sending=false; }
+}
+async function sendTune(i,quiet){
+  const dev=target(); if(!dev) return;
+  const st=stations[i], oa=onAir(st);                      // timing is computed NOW, at send time
+  const uris=[]; let span=-oa.offset;
+  for(let k=0;k<60;k++){ const t=st.tracks[(oa.idx+k)%st.tracks.length]; uris.push(t.uri); span+=t.dur; }
+  queueEnd=Date.now()+span;               // when the 60 queued songs run out
+  const pos=Math.max(0,Math.min(Math.floor(oa.offset+LAG), oa.track.dur-1500));
+  const q="?device_id="+encodeURIComponent(dev);
+  const seq=++tuneSeq; expectUri=uris[0];
+  try{
+    await api("PUT","/me/player/play"+q,{ uris, position_ms:pos });
+    if(i!==current) return;                                // you already moved on; the next request is queued
+    lastTune=Date.now();
+    if(devId!=="sdk"&&!quiet) waitForStart(uris[0],seq);
+    if(modeSet!==dev){ modeSet=dev;                        // shuffle/repeat off: once per device is enough
+      api("PUT","/me/player/shuffle"+q+"&state=false").catch(()=>{ if(modeSet===dev) modeSet=null; });
+      api("PUT","/me/player/repeat"+q+"&state=off").catch(()=>{}); }
+    setStatus("");
+  }catch(e){
+    if(!quiet&&i===current) stopStatic(true);
+    if(e.status===404&&i===current&&Date.now()-lastWake>15000){ lastWake=Date.now(); wakeSpotify(); setStatus("Opening Spotify…"); await sleep(3500); await refreshDevices(); if(i===current&&target()) tune(i); return; }   // "no active device": wake the Spotify app and retry once
+    setStatus("Couldn't tune: "+e.message+(e.status===404?" Open Spotify on that device, then try again.":"")); }
+}
+/* the app page and the overlay page are two windows of the same app: they tell each other which station is tuned (screen only, no extra Spotify call) */
+let curSeen=0;
+const ME=OVERLAY?"ov":"main";
+function publishCur(){ curSeen=Date.now(); LS.set("curst",{i:current,t:curSeen,src:ME}); }
+function adoptCur(){
+  const c=LS.get("curst",null); if(!c||c.t<=curSeen) return; curSeen=c.t;
+  if(c.src===ME||c.i==null||c.i===current||!stations[c.i]) return;
+  current=c.i; lastTune=Date.now(); misses=0; lastUri=null; markOn(); hubStation(hot>=0?hot:current);
+}
+setInterval(adoptCur,800); addEventListener("storage",adoptCur); document.addEventListener("visibilitychange",adoptCur);
+function step(d){ const n=stations.length; tune((((current===null?(d>0?-1:0):current)+d)%n+n)%n); }
+/* mute (the radio keeps running on the live clock; you just can't hear it) */
+let muted=false;
+async function applyVolume(){
+  const v=muted?0:LS.get("vol",.8);
+  try{
+    if(devId==="sdk"&&player) await player.setVolume(v);
+    else if(target()) await api("PUT","/me/player/volume?volume_percent="+Math.round(v*100)+"&device_id="+encodeURIComponent(target()));
+  }catch(e){ setStatus("Couldn't change volume on that device: "+e.message); }
+}
+function toggleMute(){
+  muted=!muted;
+  updatePP(); applyVolume();
+}
+function updatePP(){ $("pp").innerHTML=muted?"&#128263;":"&#128265;"; $("pp").classList.toggle("muted",muted); $("pp").title=muted?"Unmute (Space)":"Mute (Space)"; }
+$("pp").onclick=toggleMute;
+
+/* ---------- title cleaner: strips "- 2011 Remaster", "(Remastered)", "[Deluxe Edition]", "- Mono Version"... ---------- */
+const NOISE = [
+  /re-?master/i,                                           // remaster, remastered, re-mastered, remasterizado/a, 2011 Remaster, Digitally Remastered
+  /re-?issue/i,                                            // reissue / re-issue
+  /\b(deluxe|expanded|anniversary|collector'?s|special|limited|legacy|super deluxe|platinum|tour|bonus)\b.*\b(edition|version|reissue)\b/i,
+  /\bbonus\s+tracks?\b/i,
+  /^\s*(mono|stereo)(\s+(version|mix|remix))?\s*$/i,       // "Mono", "Stereo Mix"
+  /\b(mono|stereo)\s+(version|mix)\b/i,
+  /^\s*(original\s+)?(album|single)\s+version\s*$/i,
+  /^\s*(digital|digitally)\s+(version|master)\b/i,
+  /^\s*\d{4}\s+(mix|version)\s*$/i,                        // "2009 Mix"
+];
+const isNoise = t => NOISE.some(r=>r.test(t));
+function cleanTitle(raw){
+  if(!raw) return raw;
+  let s=String(raw);
+  const orig=s;
+  // 1) bracket groups anywhere: (..) [..] {..} and full-width （..）
+  s=s.replace(/\s*[\(\[\{（【]([^\)\]\}）】]*)[\)\]\}）】]/g,(m,inner)=>isNoise(inner)?"":m);
+  // 2) dash segments (" - ", " – ", " — ", " / " is left alone): drop noisy ones, never the first segment
+  const parts=s.split(/\s+[-–—]\s+/);
+  if(parts.length>1){
+    const kept=[parts[0]]; for(let i=1;i<parts.length;i++) if(!isNoise(parts[i])) kept.push(parts[i]);
+    s=kept.join(" - ");
+  }
+  s=s.replace(/\s{2,}/g," ").replace(/\s+[-–—:,]+\s*$/,"").trim();
+  return s||orig.trim();
+}
+
+/* ---------- hub (the player in the middle) ---------- */
+function hubStation(i){                       // logo + name in the middle (the tuned station, or the one you point at)
+  const im=$("hlogo"), st=stations[i];
+  if(!st){ $("hname").textContent="GTA SPOTIFY RADIO"; im.hidden=true; return; }
+  const inf=stInfo(st); $("hname").textContent=inf.name;
+  if(inf.logo){ im.src=`../logos/${String(inf.logo).padStart(2,"0")}.png`; im.hidden=false; } else im.hidden=true;
+}
+function showStation(){
+  const st=stations[current]; if(!st) return;
+  hubStation(current);
+  $("htrack").textContent="Tuning in…"; $("hartist").textContent=""; $("npTrack").textContent="Tuning in…"; $("npArtist").textContent="";
+}
+setInterval(()=>{
+  if(current===null) return;
+  const st=stations[current], oa=onAir(st);
+  if(oa.track.uri!==lastUri){
+    lastUri=oa.track.uri; const ct=cleanTitle(oa.track.name);
+    $("htrack").textContent=ct; $("hartist").textContent=oa.track.artist; $("npTrack").textContent=ct; $("npArtist").textContent=oa.track.artist;
+    if("mediaSession" in navigator && window.MediaMetadata){ try{ navigator.mediaSession.metadata=new MediaMetadata({title:cleanTitle(oa.track.name),artist:oa.track.artist,album:stInfo(st).name,artwork:stInfo(st).logo?[{src:new URL("../logos/"+String(stInfo(st).logo).padStart(2,"0")+".png",location.href).href,sizes:"256x256",type:"image/png"}]:[]}); }catch{} }
+  }
+},500);
+// Keeps the radio honest, silently. It only steps in if Spotify is clearly NOT on this station's current
+// song (or one next to it) two checks in a row, or when the queued songs are about to run out.
+async function guardCheck(){
+  if(OVERLAY||current===null||paused||Date.now()-lastTune<9000) return;
+  if(Date.now()>queueEnd-20000){ tune(current,{quiet:true}); return; }          // refill the queue before it empties
+  const st=stations[current], oa=onAir(st), n=st.tracks.length;
+  const near=new Set([-1,0,1].map(d=>st.tracks[(oa.idx+d+n)%n].uri));           // previous / current / next: drift is fine
+  try{
+    let now=null;
+    if(devId==="sdk"&&player){
+      const s=await player.getCurrentState(); if(s&&s.paused){ misses=0; return; }
+      const c=s&&s.track_window&&s.track_window.current_track; now=c?[c.uri,c.linked_from&&c.linked_from.uri]:null;
+    }else{
+      const d=await api("GET","/me/player"); if(!d||!d.is_playing||!d.item){ misses=0; return; }
+      now=[d.item.uri,d.item.linked_from&&d.item.linked_from.uri];
+    }
+    misses=(now&&now.some(u=>u&&near.has(u)))?0:misses+1;                        // "linked_from" = Spotify swapped in another version
+    if(misses>=2){ misses=0; tune(current,{quiet:true}); }
+  }catch{}
+}
+setInterval(guardCheck,10000);
+function setupMediaSession(){
+  if(!("mediaSession" in navigator)) return;
+  try{ navigator.mediaSession.setActionHandler("previoustrack",()=>step(-1)); navigator.mediaSession.setActionHandler("nexttrack",()=>step(1)); }catch{}
+}
+
+/* ---------- the wheel: always on, circles around a ring ---------- */
+const NS="http://www.w3.org/2000/svg";
+const CX=500, CY=500, RR=410, CR=40;   // CR = logo radius; neighbours almost touch
+let stEls=[], angles=[], hot=-1;
+function mk(tag,attrs,parent){ const e=document.createElementNS(NS,tag); for(const k in attrs) e.setAttribute(k,attrs[k]); (parent||$("wheel")).append(e); return e; }
+function arcD(r,a0,a1,rev){
+  const p=a=>[CX+r*Math.cos(a),CY+r*Math.sin(a)], [x0,y0]=p(a0), [x1,y1]=p(a1), large=Math.abs(a1-a0)>Math.PI?1:0;
+  return rev?`M${x1} ${y1}A${r} ${r} 0 ${large} 0 ${x0} ${y0}`:`M${x0} ${y0}A${r} ${r} 0 ${large} 1 ${x1} ${y1}`;
+}
+function buildWheel(){
+  const svg=$("wheel"); svg.innerHTML=""; stEls=[]; angles=[]; hot=-1;
+  const n=stations.length, step=2*Math.PI/n, A0=-Math.PI/2;
+  stations.forEach((s,i)=>{
+    const a=A0+(i+.5)*step; angles[i]=Math.atan2(Math.sin(a),Math.cos(a));
+    const el=mk("g",{class:"st",transform:`translate(${CX+RR*Math.cos(a)} ${CY+RR*Math.sin(a)})`});
+    const inn=mk("g",{class:"in"},el);
+    mk("circle",{r:CR,class:"c"},inn);
+    const inf=stInfo(s);
+    if(inf.logo){
+      const img=mk("image",{href:`../logos/${String(inf.logo).padStart(2,"0")}.png`,x:-CR,y:-CR,width:CR*2,height:CR*2,class:"lg"+(LOGO_MONO?" mono":"")},inn);
+      img.setAttribute("preserveAspectRatio","xMidYMid slice");
+    } else { const t=mk("text",{class:"un"},inn); t.textContent="···"; }
+    mk("circle",{r:CR+2.5,class:"rs"},inn); mk("circle",{r:CR+1.5,class:"rh"},inn);
+    stEls[i]=el;
+  });
+  markOn();
+}
+function markOn(){ stEls.forEach((el,i)=>el.classList.toggle("on",i===current)); }
+let ptrType="mouse";
+addEventListener("pointerdown",e=>{ ptrType=e.pointerType; },true);
+function setHot(i){
+  if(i===hot) return; hot=i;
+  if(i>=0){ hoverTick(); if(ptrType!=="mouse"&&navigator.vibrate){ try{ navigator.vibrate(7); }catch{} } }
+  stEls.forEach((el,k)=>el.classList.toggle("hov",k===i));
+  if(i>=0&&stEls[i]) stEls[i].parentNode.appendChild(stEls[i]);   // bring it to the front
+  hubStation(i>=0?i:(current===null?-1:current));
+}
+function pointToIndex(e,free){
+  const w=$("wheel"), r=w.getBoundingClientRect(), k=1000/r.width;
+  const x=(e.clientX-r.left)*k-CX, y=(e.clientY-r.top)*k-CY, d=Math.hypot(x,y);
+  if(d<(free?250:300)||(!free&&d>500)||!angles.length) return -1;
+  const a=Math.atan2(y,x); let best=-1, bd=1e9;
+  angles.forEach((ang,i)=>{ let diff=Math.abs(a-ang); diff=Math.min(diff,2*Math.PI-diff); if(diff<bd){ bd=diff; best=i; } });
+  return best;
+}
+let pressed=false;
+const wheelEl=$("wheel");
+wheelEl.addEventListener("pointermove",e=>{ if(e.pointerType==="mouse") setHot(pointToIndex(e)); });
+wheelEl.addEventListener("pointerleave",()=>{ if(!pressed) setHot(-1); });
+wheelEl.addEventListener("pointerdown",e=>{ if(e.pointerType!=="mouse") return; pressed=true; try{ wheelEl.setPointerCapture(e.pointerId); }catch{} setHot(pointToIndex(e)); });
+wheelEl.addEventListener("pointerup",e=>{ if(e.pointerType!=="mouse"||!pressed) return; pressed=false; const i=pointToIndex(e); setHot(e.pointerType==="mouse"?i:-1); if(i>=0) tune(i); });
+wheelEl.addEventListener("pointercancel",()=>{ pressed=false; setHot(-1); });
+/* touch: the whole screen is the thumbstick. Press anywhere, slide toward a station (like pushing a stick), release to tune.
+   Pressing near the middle (the dead zone) and releasing does nothing. */
+let stick=false;
+const stickOK=e=>!(e.target.closest&&e.target.closest("#foot,#volwrap,#handle,button,input,select"))&&e.clientY<innerHeight-70;
+addEventListener("pointerdown",e=>{ if(e.pointerType==="mouse"||!$("radio").classList.contains("on")||!stickOK(e)) return; stick=true; setHot(pointToIndex(e,true)); });
+addEventListener("pointermove",e=>{ if(stick&&e.pointerType!=="mouse") setHot(pointToIndex(e,true)); });
+addEventListener("pointerup",e=>{ if(!stick||e.pointerType==="mouse") return; stick=false; const i=pointToIndex(e,true); setHot(-1); if(i>=0){ if(navigator.vibrate){ try{ navigator.vibrate(20); }catch{} } tune(i); } });
+addEventListener("pointercancel",()=>{ if(stick){ stick=false; setHot(-1); } });
+$("handle").addEventListener("pointerdown",e=>{ e.stopPropagation(); wakeFoot(); });
+/* the bottom menu hides itself; move the mouse (or tap) at the bottom edge to bring it back */
+let footT=null;
+function wakeFoot(){
+  const f=$("foot"); f.classList.remove("away"); clearTimeout(footT);
+  footT=setTimeout(()=>{ if(!f.matches(":hover")&&!/SELECT|INPUT/.test((document.activeElement||{}).tagName||"")) f.classList.add("away"); else wakeFoot(); },3500);
+}
+["pointermove","pointerdown"].forEach(ev=>addEventListener(ev,e=>{ if(e.clientY>innerHeight-90) wakeFoot(); },{passive:true}));   // only the bottom edge brings it back
+wakeFoot();
+addEventListener("keydown",e=>{
+  if(!$("radio").classList.contains("on")) return;
+  if(/INPUT|SELECT|TEXTAREA/.test((document.activeElement||{}).tagName||"")) return;
+  if(e.code==="Space"&&!e.repeat){ e.preventDefault(); toggleMute(); }
+  if(e.code==="ArrowRight"||e.code==="ArrowDown"){ e.preventDefault(); step(1); }
+  if(e.code==="ArrowLeft"||e.code==="ArrowUp"){ e.preventDefault(); step(-1); }
+});
+
+/* ---------- footer buttons ---------- */
+$("refPl").onclick=()=>{ LS.del("cache3"); location.hash=""; location.reload(); };
+$("chPl").onclick=()=>{ location.hash="#pick"; location.reload(); };
+$("out").onclick=()=>{ LS.del("tok"); LS.del("cache3"); location.hash=""; location.reload(); };
+
+function enterRadio(){ show("radio"); buildWheel(); setupMediaSession(); startPlayer(); refreshDevices(); updatePP(); adoptCur(); ovInit(); }
+/* Android app only: the "over other apps" wheel (swipe in from the right edge of the screen, anywhere) */
+let ovDone=false;
+async function ovInit(){
+  if(ovDone||OVERLAY||!NATIVE) return;
+  ovDone=true; const b=$("ovBtn"); b.hidden=false;
+  const st=()=>{ try{ return JSON.parse(GtaNative.overlayStatus()); }catch{ return {}; } };
+  const refresh=()=>{ const s=st(); b.textContent=s.running?"Overlay: on":"Overlay: off"; return s; };
+  b.onclick=()=>{
+    const s=refresh();
+    try{
+      if(s.running) GtaNative.overlayStop();
+      else if(!s.granted){ GtaNative.overlayRequestPermission(); setStatus("Allow “Display over other apps” for this app, come back and tap Overlay again."); wakeFoot(); }
+      else { GtaNative.overlayStart(); setStatus("Overlay on: swipe left near the right edge of the screen, in any app."); }
+    }catch(e){ showErr("Overlay: "+(e.message||e)); }
+    setTimeout(refresh,400);
+  };
+  refresh(); document.addEventListener("visibilitychange",()=>{ if(!document.hidden) refresh(); });
+}
+
+/* ---------- boot ---------- */
+/* ---------- overlay mode (page loaded by the Android overlay service) ---------- */
+let ovTimer=null;
+async function bootOverlay(){
+  const cached=LS.get("tok")&&loadCache();
+  if(!cached) return;                                   // log in / build the radio in the app first
+  stations=orderAndGroup(cached); show("radio"); buildWheel(); refreshDevices(); adoptCur();
+  if(current===null){ const c=LS.get("curst",null); if(c&&stations[c.i]){ current=c.i; markOn(); hubStation(current); } }
+  const arm=()=>{ clearTimeout(ovTimer); ovTimer=setTimeout(()=>{ try{ GtaOverlayHost.close(); }catch{} },1500); };   // closes 1.5 s after your last touch
+  addEventListener("pointerdown",()=>clearTimeout(ovTimer),true);
+  ["pointerup","pointercancel"].forEach(ev=>addEventListener(ev,arm,true));
+  window.ovOpen=()=>{ clearTimeout(ovTimer); adoptCur(); if(!devId) refreshDevices(); document.documentElement.classList.add("open"); setHot(-1); hubStation(current===null?-1:current); };
+  window.ovClose=()=>{ clearTimeout(ovTimer); stick=false; pressed=false; setHot(-1); document.documentElement.classList.remove("open"); };
+  document.title="overlay-ready";
+}
+(async function boot(){
+  if(!OVERLAY) $("redir").textContent=REDIRECT; $("cid").value=LS.get("cid","");
+  $("login").onclick=login;
+  LS.del("sel"); LS.del("cache");                    // leftovers from earlier versions
+  if(OVERLAY){ await bootOverlay(); return; }
+  if(NATIVE){                                         // Spotify sends you back through gtaoverlay://callback?code=...
+    window.onNativeUrl=async url=>{
+      const r=new URL(url).searchParams;
+      if(r.get("code")){
+        try{ await tokenRequest({ grant_type:"authorization_code", code:r.get("code"), redirect_uri:REDIRECT, code_verifier:sessionStorage.getItem("verifier")||LS.get("verifier") }); location.reload(); }
+        catch(e){ showErr("Login failed: "+e.message); }
+      } else if(r.get("error")) showErr("Spotify returned: "+r.get("error"));
+    };
+    try{ GtaNative.pageReady(); }catch{}
+  }
+  const q=new URLSearchParams(location.search);
+  if(q.get("code")){
+    try{ await tokenRequest({ grant_type:"authorization_code", code:q.get("code"), redirect_uri:REDIRECT, code_verifier:sessionStorage.getItem("verifier")||LS.get("verifier") }); }
+    catch(e){ showErr("Login failed: "+e.message); }
+    history.replaceState({},"",PAGE);
+  } else if(q.get("error")){
+    showErr("Spotify returned: "+q.get("error")); history.replaceState({},"",PAGE);
+  }
+  if(LS.get("tok")){
+    const wantPicker=location.hash==="#pick";
+    const cached=!wantPicker&&loadCache();
+    if(cached){ stations=orderAndGroup(cached); enterRadio(); return; }       // instant start
+    $("loadmsg").textContent="Loading your playlists…";
+    try{
+      await loadPlaylists();
+      const genre=pickGenre(playlists);
+      if(genre.length&&!wantPicker){
+        const ok=await buildRadio(genre.map(p=>p.id), m=>$("loadmsg").textContent=m);
+        if(!ok) show("s-pick");
+        return;
+      }
+      show("s-pick"); return;
+    }catch(e){
+      console.warn(e); LS.del("tok");
+      showErr("Couldn't load your playlists: "+e.message+(e.status===403?"\nIn the Spotify developer dashboard, open your app > User Management and add your Spotify account email.":""));
+    }
+  }
+  show("s-setup");
+})().catch(e=>{ showErr("Startup failed: "+e.message); show("s-setup"); });
+</script>
+</body>
+</html>

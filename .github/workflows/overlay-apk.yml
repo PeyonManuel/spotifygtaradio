@@ -1,0 +1,90 @@
+name: Build Overlay APK
+
+# A separate app ("GTA Radio Overlay"): the radio page plus a wheel you can pull up over ANY app by swiping in from the right edge.
+# Run it from the Actions tab ("Run workflow"), then download GtaRadioOverlay.apk from the Releases page.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["overlay/app/**", ".github/workflows/overlay-apk.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - name: Create the Android project
+        working-directory: overlay/app
+        run: |
+          npm install
+          npx cap add android
+          python3 - <<'PY'
+          path = "android/app/src/main/AndroidManifest.xml"
+          m = open(path).read()
+          # gtaoverlay://callback brings the Spotify login back into this app
+          flt = """
+                  <intent-filter>
+                      <action android:name="android.intent.action.VIEW" />
+                      <category android:name="android.intent.category.DEFAULT" />
+                      <category android:name="android.intent.category.BROWSABLE" />
+                      <data android:scheme="gtaoverlay" android:host="callback" />
+                  </intent-filter>
+              """
+          assert "</activity>" in m
+          m = m.replace("</activity>", flt + "</activity>", 1)
+          perms = """
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+          """
+          svc = """
+              <service android:name=".OverlayService" android:exported="false" android:foregroundServiceType="specialUse">
+                  <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Edge-swipe radio wheel shown over other apps" />
+              </service>
+          """
+          assert "<application" in m and "</application>" in m
+          perms += """
+              <queries><package android:name="com.spotify.music" /></queries>
+          """
+          m = m.replace("<application", perms + "<application", 1)
+          m = m.replace("</application>", svc + "</application>", 1)
+          open(path, "w").write(m)
+          PY
+          # our own activity + the overlay service (replace the generated MainActivity)
+          cp native/*.java android/app/src/main/java/com/manuel/gtaoverlay/
+          npx cap sync android
+      - name: App icon
+        run: |
+          pip install pillow
+          python3 - <<'PY'
+          import os, shutil
+          from PIL import Image
+          res = "overlay/app/android/app/src/main/res"
+          shutil.rmtree(res + "/mipmap-anydpi-v26", ignore_errors=True)
+          src = Image.open("icon-512.png").convert("RGBA")
+          for d, size in {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}.items():
+              folder = f"{res}/mipmap-{d}"
+              if not os.path.isdir(folder): continue
+              icon = src.resize((size, size), Image.LANCZOS)
+              for name in ("ic_launcher.png", "ic_launcher_round.png", "ic_launcher_foreground.png"):
+                  icon.save(f"{folder}/{name}")
+          PY
+      - name: Build debug APK
+        working-directory: overlay/app/android
+        run: ./gradlew assembleDebug
+      - name: Rename
+        run: cp overlay/app/android/app/build/outputs/apk/debug/app-debug.apk GtaRadioOverlay.apk
+      - name: Publish to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: overlay-apk-${{ github.run_number }}
+          name: GTA Radio Overlay APK ${{ github.run_number }}
+          files: GtaRadioOverlay.apk
