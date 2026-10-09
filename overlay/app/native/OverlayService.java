@@ -54,6 +54,8 @@ public class OverlayService extends Service {
     private static final int EDGE_GAP_DP = 26;      // distance of the swipe strip from the screen edge (keeps clear of the system "back" gesture)
     private static final int STRIP_W_DP = 20;
     private static final float STRIP_H_FRACTION = 0.32f;
+    // Never exactly 0: Android only lets an app start Spotify's screen from the background while it has a *visible* overlay window.
+    private static final float IDLE_ALPHA = 0.01f;
     private static final int SWIPE_DP = 36;         // how far you drag before the wheel opens
 
     private final Handler h = new Handler(Looper.getMainLooper());
@@ -73,7 +75,7 @@ public class OverlayService extends Service {
         @Override public void run() {
             if (open || wheelHost == null) return;
             wheelLp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-            wheelLp.alpha = 0f;
+            wheelLp.alpha = IDLE_ALPHA;
             try { wm.updateViewLayout(wheelHost, wheelLp); } catch (Exception ignored) {}
         }
     };
@@ -192,7 +194,7 @@ public class OverlayService extends Service {
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                         | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 PixelFormat.TRANSLUCENT);
-        wheelLp.alpha = 0f;                                  // invisible and untouchable until opened
+        wheelLp.alpha = IDLE_ALPHA;                          // practically invisible and untouchable until opened
         if (Build.VERSION.SDK_INT >= 30) wheelLp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
         else if (Build.VERSION.SDK_INT >= 28) wheelLp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         wm.addView(wheelHost, wheelLp);

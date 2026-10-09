@@ -404,12 +404,22 @@ async function refreshDevices(phone){
   devices.filter(d=>d.id!==sdkId&&!d.is_restricted).forEach(d=>opts.push({v:d.id,name:d.name+(d.is_active?" (active)":"")}));
   if(!opts.length){ sel.innerHTML='<option value="">No device found: open Spotify on your phone</option>'; devId=null; updateVolUI(); return; }
   opts.forEach(o=>{ const e=document.createElement("option"); e.value=o.v; e.textContent=o.name; sel.append(e); });
-  const want=LS.get("dev",null), act=devices.find(d=>d.is_active&&d.id!==sdkId);
-  const ph=phone&&devices.find(d=>/smartphone/i.test(d.type||"")&&!d.is_restricted&&d.id!==sdkId);
-  const pick=(ph&&opts.find(o=>o.v===ph.id))||opts.find(o=>o.v===want)||opts.find(o=>o.v==="sdk")||(act&&opts.find(o=>o.v===act.id))||opts[0];
-  sel.value=pick.v; devId=pick.v; if(ph&&pick.v===ph.id) LS.set("dev",ph.id); updateVolUI();
+  const want=LS.get("dev",null), manual=LS.get("devManual",null), act=devices.find(d=>d.is_active&&d.id!==sdkId);
+  let pick;
+  if(phone){
+    // phone mode: this phone (Spotify type Smartphone/Tablet) or a device you picked yourself in the list. Never Chrome's web player or another computer:
+    // if the phone isn't there, devId stays empty so the radio wakes Spotify and switches to it.
+    const isPhone=d=>/smartphone|tablet/i.test(d.type||"")&&!d.is_restricted&&d.id!==sdkId;
+    const ph=devices.find(d=>isPhone(d)&&d.id===want)||devices.find(d=>isPhone(d)&&d.is_active)||devices.find(isPhone);
+    pick=(manual&&opts.find(o=>o.v===manual))||(ph&&opts.find(o=>o.v===ph.id))||null;
+    if(!pick){ const e=document.createElement("option"); e.value=""; e.textContent="Phone not found: opening Spotify…"; sel.prepend(e); sel.value=""; devId=null; updateVolUI(); return; }
+    if(ph&&pick.v===ph.id) LS.set("dev",ph.id);
+  } else {
+    pick=opts.find(o=>o.v===want)||opts.find(o=>o.v==="sdk")||(act&&opts.find(o=>o.v===act.id))||opts[0];
+  }
+  sel.value=pick.v; devId=pick.v; updateVolUI();
 }
-$("dev").onchange=()=>{ devId=$("dev").value||null; LS.set("dev",devId); updateVolUI(); if(current!==null&&devId) tune(current); };
+$("dev").onchange=()=>{ devId=$("dev").value||null; LS.set("dev",devId); LS.set("devManual",devId); updateVolUI(); if(current!==null&&devId) tune(current,{force:true}); };
 $("devRef").onclick=()=>refreshDevices();
 function updateVolUI(){ $("volwrap").style.display="flex"; }
 $("vol").value=LS.get("vol",.8);
@@ -530,11 +540,13 @@ async function waitForStart(uri,seq){
 /* Tuning is split in two so mashing the wheel can't break anything:
    1) instantly: the screen, the sounds and the "current station" follow every click;
    2) the actual Spotify request is debounced and sent one at a time, always for the LATEST station, with fresh on-air timing. */
-let pending=null, sendTimer=null, sending=false, lastSend=0, modeSet=null;
+let pending=null, sendTimer=null, sending=false, lastSend=0, modeSet=null, tuneOK=false;   // tuneOK: the current station really is playing
 const TUNE_DEBOUNCE=280, TUNE_MIN_GAP=450;
 function tune(i,opts){
   const quiet=!!(opts&&opts.quiet);      // quiet = silent re-sync: no static, no change on screen
   const dev=target();
+  if(!quiet&&i===current&&tuneOK&&dev&&!(opts&&opts.force)) return;     // same station you're already on: nothing to do (no switch sound)
+  if(!quiet) tuneOK=false;
   if(devId==="sdk"&&player){ try{ player.activateElement(); }catch{} }
   current=i; lastTune=Date.now(); misses=0; if(muted) setTimeout(applyVolume,600); publishCur();
   if(!quiet){ expectUri=null; const sd=switchSound(); startStatic(sd,dev?7000:30000); markOn(); showStation(); lastUri=null; }   // no device yet: keep "tuning" for longer while Spotify wakes up
@@ -589,7 +601,7 @@ async function sendTune(i,quiet){
   try{
     await api("PUT","/me/player/play"+q,{ uris, position_ms:pos });
     if(i!==current) return;                                // you already moved on; the next request is queued
-    lastTune=Date.now();
+    lastTune=Date.now(); tuneOK=true;
     if(devId!=="sdk"&&!quiet) waitForStart(uris[0],seq);
     if(modeSet!==dev){ modeSet=dev;                        // shuffle/repeat off: once per device is enough
       api("PUT","/me/player/shuffle"+q+"&state=false").catch(()=>{ if(modeSet===dev) modeSet=null; });
@@ -607,7 +619,7 @@ function publishCur(){ curSeen=Date.now(); LS.set("curst",{i:current,t:curSeen,s
 function adoptCur(){
   const c=LS.get("curst",null); if(!c||c.t<=curSeen) return; curSeen=c.t;
   if(c.src===ME||c.i==null||c.i===current||!stations[c.i]) return;
-  current=c.i; lastTune=Date.now(); misses=0; lastUri=null; markOn(); hubStation(hot>=0?hot:current);
+  current=c.i; lastTune=Date.now(); misses=0; lastUri=null; tuneOK=true; markOn(); hubStation(hot>=0?hot:current);
 }
 setInterval(adoptCur,800); addEventListener("storage",adoptCur); document.addEventListener("visibilitychange",adoptCur);
 function step(d){ const n=stations.length; tune((((current===null?(d>0?-1:0):current)+d)%n+n)%n); }
