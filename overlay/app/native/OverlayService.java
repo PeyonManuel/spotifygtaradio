@@ -54,6 +54,7 @@ public class OverlayService extends Service {
     private static final int EDGE_GAP_DP = 26;      // distance of the swipe strip from the screen edge (keeps clear of the system "back" gesture)
     private static final int STRIP_W_DP = 20;
     private static final float STRIP_H_FRACTION = 0.32f;
+    private static final float STRIP_UP_FRACTION = 0.15f;   // how far above the vertical centre the strip sits (fraction of screen height)
     // Never exactly 0: Android only lets an app start Spotify's screen from the background while it has a *visible* overlay window.
     private static final float IDLE_ALPHA = 0.01f;
     private static final int SWIPE_DP = 36;         // how far you drag before the wheel opens
@@ -127,6 +128,7 @@ public class OverlayService extends Service {
         super.onConfigurationChanged(c);
         if (strip != null && stripAttached) {
             stripLp.height = (int) (getResources().getDisplayMetrics().heightPixels * STRIP_H_FRACTION);
+            stripLp.y = -(int) (getResources().getDisplayMetrics().heightPixels * STRIP_UP_FRACTION);
             try { wm.updateViewLayout(strip, stripLp); } catch (Exception ignored) {}
         }
     }
@@ -158,7 +160,7 @@ public class OverlayService extends Service {
                 PendingIntent.getService(this, 1, stop, immutable | PendingIntent.FLAG_UPDATE_CURRENT));
         b.setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentTitle("GTA Spotify Radio")
-                .setContentText("Swipe left near the right edge to open the wheel")
+                .setContentText("Swipe right from the left edge to open the wheel")
                 .setOngoing(true);
         Notification n = b.build();
         if (Build.VERSION.SDK_INT >= 34) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
@@ -208,8 +210,8 @@ public class OverlayService extends Service {
         g.setColor(0x44FFFFFF);
         g.setCornerRadius(dp(2));
         pill.setBackground(g);
-        FrameLayout.LayoutParams pl = new FrameLayout.LayoutParams(dp(4), dp(72), Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-        pl.rightMargin = dp(2);
+        FrameLayout.LayoutParams pl = new FrameLayout.LayoutParams(dp(4), dp(72), Gravity.CENTER_VERTICAL | Gravity.LEFT);
+        pl.leftMargin = dp(2);
         strip.addView(pill, pl);
         strip.setOnTouchListener((v, e) -> onStripTouch(e));
 
@@ -219,8 +221,9 @@ public class OverlayService extends Service {
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 PixelFormat.TRANSLUCENT);
-        stripLp.gravity = Gravity.RIGHT | Gravity.CENTER_VERTICAL;
+        stripLp.gravity = Gravity.LEFT | Gravity.CENTER_VERTICAL;
         stripLp.x = dp(EDGE_GAP_DP);
+        stripLp.y = -(int) (getResources().getDisplayMetrics().heightPixels * STRIP_UP_FRACTION);
         applyOptions();
     }
 
@@ -246,8 +249,8 @@ public class OverlayService extends Service {
                 return true;
             case MotionEvent.ACTION_MOVE:
                 if (!forwarding) {
-                    float dx = sx - e.getRawX(), dy = Math.abs(e.getRawY() - sy);
-                    if (dx > dp(SWIPE_DP) && dx > dy * 1.2f) {         // a leftward swipe
+                    float dx = e.getRawX() - sx, dy = Math.abs(e.getRawY() - sy);
+                    if (dx > dp(SWIPE_DP) && dx > dy * 1.2f) {         // a rightward swipe, away from the left edge
                         forwarding = true;
                         openWheel(false);
                         downTime = SystemClock.uptimeMillis();

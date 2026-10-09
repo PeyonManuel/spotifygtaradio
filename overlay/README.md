@@ -1,7 +1,7 @@
 # GTA Radio Overlay (separate Android app)
 
 A separate app from the main radio. It shows the same radio, plus a **wheel you can pull up over any app**:
-swipe left on the thin handle near the right edge of the screen, slide to a station while still holding, lift your finger.
+swipe right on the thin handle near the left edge of the screen, slide to a station while still holding, lift your finger.
 The wheel closes 1.5 s after your last touch (touch it again to keep it open). If Spotify isn't running, it opens Spotify first.
 
 * The page lives in `overlay/index.html` (published at `/spotifygtaradio/overlay/` on GitHub Pages). The main page is untouched.

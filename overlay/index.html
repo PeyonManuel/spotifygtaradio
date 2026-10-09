@@ -810,7 +810,7 @@ async function ovInit(){
     try{
       if(s.running) GtaNative.overlayStop();
       else if(!s.granted){ GtaNative.overlayRequestPermission(); setStatus("Allow “Display over other apps” for this app, come back and tap Overlay again."); wakeFoot(); }
-      else { GtaNative.overlayStart(); setStatus("Overlay on: swipe left near the right edge of the screen, in any app."); }
+      else { GtaNative.overlayStart(); setStatus("Overlay on: swipe right from the left edge of the screen, in any app."); }
     }catch(e){ showErr("Overlay: "+(e.message||e)); }
     setTimeout(refresh,400);
   };
