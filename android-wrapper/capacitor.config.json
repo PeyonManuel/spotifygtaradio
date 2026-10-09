@@ -1,0 +1,10 @@
+{
+  "appId": "com.manuel.manufm",
+  "appName": "Manu FM",
+  "webDir": "www",
+  "server": {
+    "url": "https://peyonmanuel.github.io/spotifygtaradio/",
+    "androidScheme": "https",
+    "allowNavigation": ["accounts.spotify.com", "*.spotify.com", "*.scdn.co"]
+  }
+}
