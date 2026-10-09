@@ -43,7 +43,25 @@
   .st.hov .rh { stroke:#fff; stroke-width:3; }
   .st.hov .rs { stroke:none; }
   .st .un { fill:#fff; opacity:.5; font-size:11px; font-weight:800; letter-spacing:.15em; text-anchor:middle; dominant-baseline:middle; }
-  #radio { --accent:#fff; }
+  #radio { --accent:#fff; touch-action:none; }
+  html { overscroll-behavior:none; }
+  .st .in { transform-box:fill-box; transform-origin:center; transition:transform .12s; }
+  .st.hov .in { transform:scale(1.6); }                        /* the pointed station swells up, GTA style */
+  #hprev { display:none; }
+  #np { display:none; text-align:center; max-width:92vw; padding:4px 14px 0; }
+  #npTrack { font-weight:700; font-size:clamp(16px,5vw,24px); line-height:1.25; }
+  #npArtist { color:var(--dim); font-size:clamp(13px,3.8vw,18px); line-height:1.35; margin-top:.15em; min-height:1.35em; }
+  #handle { position:fixed; left:50%; transform:translateX(-50%); bottom:0; width:140px; height:30px; z-index:19; cursor:pointer; transition:opacity .3s; }
+  #handle::after { content:""; position:absolute; left:50%; bottom:calc(9px + env(safe-area-inset-bottom)); transform:translateX(-50%); width:56px; height:5px; border-radius:3px; background:#ffffff45; }
+  #foot:not(.away) ~ #handle { opacity:0; pointer-events:none; }
+  #foot { padding-bottom:calc(8px + env(safe-area-inset-bottom)) !important; }
+  @media (max-aspect-ratio:4/5) {                              /* portrait phones: song info moves under the wheel */
+    :root { --S:min(100vw,calc(100vh - 130px),980px); }
+    #np { display:block; min-height:78px; }
+    #htrack, #hartist { display:none !important; }
+  }
+  @supports (height:100dvh) { @media (max-aspect-ratio:4/5) { :root { --S:min(100vw,calc(100dvh - 130px),980px); } } }
+
 
   #hub { position:absolute; left:50%; top:50%; width:52%; height:52%; transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; pointer-events:none; }
   #hlogo { flex:none; aspect-ratio:1; object-fit:cover; width:clamp(64px,19cqw,190px); height:clamp(64px,19cqw,190px); border-radius:50%; margin-bottom:.5em; box-shadow:0 0 0 3px #fff, 0 0 24px #ffffff50; }
@@ -71,6 +89,7 @@
   #foot input[type=range] { width:90px; vertical-align:middle; accent-color:var(--accent); }
   #foot.away { opacity:0; transform:translateY(100%); pointer-events:none; }
   #st { flex-basis:100%; text-align:center; min-height:1.2em; }
+  @container (max-width:560px) { @media (max-aspect-ratio:4/5) { #hlogo { width:26cqw; height:26cqw; } } }
 </style>
 </head>
 <body>
@@ -121,6 +140,7 @@
       <div id="hprev"></div>
     </div>
   </div>
+  <div id="np"><div id="npTrack"></div><div id="npArtist"></div></div>
   <div id="foot">
     <select id="dev" title="Play on"></select>
     <button class="mini" id="devRef" title="Refresh devices">&#8635;</button>
@@ -129,6 +149,7 @@
     <button class="mini" id="out">Sign out</button>
     <span id="st"></span>
   </div>
+  <div id="handle" title="Menu"></div>
 </div>
 
 <script>window.onSpotifyWebPlaybackSDKReady=function(){ window.__sdkReady=true; if(window.__sdkInit) window.__sdkInit(); };</script>
@@ -580,20 +601,24 @@ function cleanTitle(raw){
 }
 
 /* ---------- hub (the player in the middle) ---------- */
+function hubStation(i){                       // logo + name in the middle (the tuned station, or the one you point at)
+  const im=$("hlogo"), st=stations[i];
+  if(!st){ $("hname").textContent="MANU FM"; im.hidden=true; return; }
+  const inf=stInfo(st); $("hname").textContent=inf.name;
+  if(inf.logo){ im.src=`logos/${String(inf.logo).padStart(2,"0")}.png`; im.hidden=false; } else im.hidden=true;
+}
 function showStation(){
   const st=stations[current]; if(!st) return;
-  $("hfam").textContent=st.name;
-  $("hname").textContent=stInfo(st).name;
-  const lg=stInfo(st).logo, im=$("hlogo");
-  if(lg){ im.src=`logos/${String(lg).padStart(2,"0")}.png`; im.hidden=false; } else im.hidden=true;
-  $("htrack").textContent="Tuning in…"; $("hartist").textContent=""; $("hprev").textContent="";
+  hubStation(current);
+  $("htrack").textContent="Tuning in…"; $("hartist").textContent=""; $("npTrack").textContent="Tuning in…"; $("npArtist").textContent="";
 }
 setInterval(()=>{
   if(current===null) return;
   const st=stations[current], oa=onAir(st);
   if(oa.track.uri!==lastUri){
-    lastUri=oa.track.uri; $("htrack").textContent=cleanTitle(oa.track.name); $("hartist").textContent=oa.track.artist;
-    if("mediaSession" in navigator && window.MediaMetadata){ try{ navigator.mediaSession.metadata=new MediaMetadata({title:cleanTitle(oa.track.name),artist:oa.track.artist,album:st.name}); }catch{} }
+    lastUri=oa.track.uri; const ct=cleanTitle(oa.track.name);
+    $("htrack").textContent=ct; $("hartist").textContent=oa.track.artist; $("npTrack").textContent=ct; $("npArtist").textContent=oa.track.artist;
+    if("mediaSession" in navigator && window.MediaMetadata){ try{ navigator.mediaSession.metadata=new MediaMetadata({title:cleanTitle(oa.track.name),artist:oa.track.artist,album:stInfo(st).name,artwork:stInfo(st).logo?[{src:new URL("logos/"+String(stInfo(st).logo).padStart(2,"0")+".png",location.href).href,sizes:"256x256",type:"image/png"}]:[]}); }catch{} }
   }
 },500);
 // Keeps the radio honest, silently. It only steps in if Spotify is clearly NOT on this station's current
@@ -637,39 +662,52 @@ function buildWheel(){
   stations.forEach((s,i)=>{
     const a=A0+(i+.5)*step; angles[i]=Math.atan2(Math.sin(a),Math.cos(a));
     const el=mk("g",{class:"st",transform:`translate(${CX+RR*Math.cos(a)} ${CY+RR*Math.sin(a)})`});
-    mk("circle",{r:CR,class:"c"},el);
+    const inn=mk("g",{class:"in"},el);
+    mk("circle",{r:CR,class:"c"},inn);
     const inf=stInfo(s);
     if(inf.logo){
-      const img=mk("image",{href:`logos/${String(inf.logo).padStart(2,"0")}.png`,x:-CR,y:-CR,width:CR*2,height:CR*2,class:"lg"+(LOGO_MONO?" mono":"")},el);
+      const img=mk("image",{href:`logos/${String(inf.logo).padStart(2,"0")}.png`,x:-CR,y:-CR,width:CR*2,height:CR*2,class:"lg"+(LOGO_MONO?" mono":"")},inn);
       img.setAttribute("preserveAspectRatio","xMidYMid slice");
-    } else { const t=mk("text",{class:"un"},el); t.textContent="···"; }
-    mk("circle",{r:CR+2.5,class:"rs"},el); mk("circle",{r:CR+1.5,class:"rh"},el);
+    } else { const t=mk("text",{class:"un"},inn); t.textContent="···"; }
+    mk("circle",{r:CR+2.5,class:"rs"},inn); mk("circle",{r:CR+1.5,class:"rh"},inn);
     stEls[i]=el;
   });
   markOn();
 }
 function markOn(){ stEls.forEach((el,i)=>el.classList.toggle("on",i===current)); }
+let ptrType="mouse";
+addEventListener("pointerdown",e=>{ ptrType=e.pointerType; },true);
 function setHot(i){
-  if(i===hot) return; hot=i; if(i>=0) hoverTick();
+  if(i===hot) return; hot=i;
+  if(i>=0){ hoverTick(); if(ptrType!=="mouse"&&navigator.vibrate){ try{ navigator.vibrate(7); }catch{} } }
   stEls.forEach((el,k)=>el.classList.toggle("hov",k===i));
-  const s=stations[i];
-  $("hprev").textContent=(i>=0&&i!==current&&s)?"▸ "+stInfo(s).name:"";
+  if(i>=0&&stEls[i]) stEls[i].parentNode.appendChild(stEls[i]);   // bring it to the front
+  hubStation(i>=0?i:(current===null?-1:current));
 }
-function pointToIndex(e){
+function pointToIndex(e,free){
   const w=$("wheel"), r=w.getBoundingClientRect(), k=1000/r.width;
   const x=(e.clientX-r.left)*k-CX, y=(e.clientY-r.top)*k-CY, d=Math.hypot(x,y);
-  if(d<300||d>500||!angles.length) return -1;
+  if(d<(free?250:300)||(!free&&d>500)||!angles.length) return -1;
   const a=Math.atan2(y,x); let best=-1, bd=1e9;
   angles.forEach((ang,i)=>{ let diff=Math.abs(a-ang); diff=Math.min(diff,2*Math.PI-diff); if(diff<bd){ bd=diff; best=i; } });
   return best;
 }
 let pressed=false;
 const wheelEl=$("wheel");
-wheelEl.addEventListener("pointermove",e=>setHot(pointToIndex(e)));
+wheelEl.addEventListener("pointermove",e=>{ if(e.pointerType==="mouse") setHot(pointToIndex(e)); });
 wheelEl.addEventListener("pointerleave",()=>{ if(!pressed) setHot(-1); });
-wheelEl.addEventListener("pointerdown",e=>{ pressed=true; try{ wheelEl.setPointerCapture(e.pointerId); }catch{} setHot(pointToIndex(e)); });
-wheelEl.addEventListener("pointerup",e=>{ if(!pressed) return; pressed=false; const i=pointToIndex(e); setHot(e.pointerType==="mouse"?i:-1); if(i>=0) tune(i); });
+wheelEl.addEventListener("pointerdown",e=>{ if(e.pointerType!=="mouse") return; pressed=true; try{ wheelEl.setPointerCapture(e.pointerId); }catch{} setHot(pointToIndex(e)); });
+wheelEl.addEventListener("pointerup",e=>{ if(e.pointerType!=="mouse"||!pressed) return; pressed=false; const i=pointToIndex(e); setHot(e.pointerType==="mouse"?i:-1); if(i>=0) tune(i); });
 wheelEl.addEventListener("pointercancel",()=>{ pressed=false; setHot(-1); });
+/* touch: the whole screen is the thumbstick. Press anywhere, slide toward a station (like pushing a stick), release to tune.
+   Pressing near the middle (the dead zone) and releasing does nothing. */
+let stick=false;
+const stickOK=e=>!(e.target.closest&&e.target.closest("#foot,#volwrap,#handle,button,input,select"))&&e.clientY<innerHeight-70;
+addEventListener("pointerdown",e=>{ if(e.pointerType==="mouse"||!$("radio").classList.contains("on")||!stickOK(e)) return; stick=true; setHot(pointToIndex(e,true)); });
+addEventListener("pointermove",e=>{ if(stick&&e.pointerType!=="mouse") setHot(pointToIndex(e,true)); });
+addEventListener("pointerup",e=>{ if(!stick||e.pointerType==="mouse") return; stick=false; const i=pointToIndex(e,true); setHot(-1); if(i>=0){ if(navigator.vibrate){ try{ navigator.vibrate(20); }catch{} } tune(i); } });
+addEventListener("pointercancel",()=>{ if(stick){ stick=false; setHot(-1); } });
+$("handle").addEventListener("pointerdown",e=>{ e.stopPropagation(); wakeFoot(); });
 /* the bottom menu hides itself; move the mouse (or tap) at the bottom edge to bring it back */
 let footT=null;
 function wakeFoot(){
