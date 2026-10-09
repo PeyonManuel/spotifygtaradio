@@ -158,7 +158,10 @@
 "use strict";
 /* ---------- config / helpers ---------- */
 const SCOPES = "streaming user-read-email user-read-private playlist-read-private playlist-read-collaborative user-modify-playback-state user-read-playback-state";
-const REDIRECT = location.origin + location.pathname;
+const PAGE = location.origin + location.pathname;
+// Inside the Android app, login happens in Chrome (so "Continue with Google" works) and comes back through this app link.
+const NATIVE = !!(window.Capacitor && typeof Capacitor.isNativePlatform==="function" && Capacitor.isNativePlatform());
+const REDIRECT = NATIVE ? "gtaradio://callback" : PAGE;
 const EPOCH = Date.UTC(2020, 0, 1);               // shared "station start" clock
 const LAG = 350;                                   // ms it takes Spotify to start a track after we ask
 const MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -184,10 +187,12 @@ async function login(){
   LS.set("cid", cid);
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
   const challenge = b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
-  sessionStorage.setItem("verifier", verifier);
-  location.href = "https://accounts.spotify.com/authorize?" + new URLSearchParams({
+  sessionStorage.setItem("verifier", verifier); LS.set("verifier", verifier);
+  const url = "https://accounts.spotify.com/authorize?" + new URLSearchParams({
     client_id:cid, response_type:"code", redirect_uri:REDIRECT, scope:SCOPES,
     code_challenge_method:"S256", code_challenge:challenge });
+  if(NATIVE){ try{ await Capacitor.registerPlugin("Browser").open({ url }); return; }catch(e){ showErr("Couldn't open the login page: "+e.message); } }
+  location.href = url;
 }
 async function tokenRequest(params){
   const r = await fetch("https://accounts.spotify.com/api/token", { method:"POST",
@@ -737,13 +742,25 @@ function enterRadio(){ show("radio"); buildWheel(); setupMediaSession(); startPl
   $("login").onclick=login;
   LS.del("sel"); LS.del("cache");                    // leftovers from earlier versions
   if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+  if(NATIVE){                                         // the app link brings the Spotify answer back here
+    try{
+      Capacitor.registerPlugin("App").addListener("appUrlOpen", async ({url})=>{
+        try{ Capacitor.registerPlugin("Browser").close(); }catch{}
+        const r=new URL(url).searchParams;
+        if(r.get("code")){
+          try{ await tokenRequest({ grant_type:"authorization_code", code:r.get("code"), redirect_uri:REDIRECT, code_verifier:sessionStorage.getItem("verifier")||LS.get("verifier") }); location.reload(); }
+          catch(e){ showErr("Login failed: "+e.message); }
+        } else if(r.get("error")) showErr("Spotify returned: "+r.get("error"));
+      });
+    }catch(e){ showErr("App link setup failed: "+e.message); }
+  }
   const q=new URLSearchParams(location.search);
   if(q.get("code")){
-    try{ await tokenRequest({ grant_type:"authorization_code", code:q.get("code"), redirect_uri:REDIRECT, code_verifier:sessionStorage.getItem("verifier") }); }
+    try{ await tokenRequest({ grant_type:"authorization_code", code:q.get("code"), redirect_uri:REDIRECT, code_verifier:sessionStorage.getItem("verifier")||LS.get("verifier") }); }
     catch(e){ showErr("Login failed: "+e.message); }
-    history.replaceState({},"",REDIRECT);
+    history.replaceState({},"",PAGE);
   } else if(q.get("error")){
-    showErr("Spotify returned: "+q.get("error")); history.replaceState({},"",REDIRECT);
+    showErr("Spotify returned: "+q.get("error")); history.replaceState({},"",PAGE);
   }
   if(LS.get("tok")){
     const wantPicker=location.hash==="#pick";

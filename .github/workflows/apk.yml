@@ -25,6 +25,22 @@ jobs:
         run: |
           npm install
           npx cap add android
+          python3 - <<'PY'
+          # let gtaradio://callback open this app (Spotify login returns through it)
+          path = "android/app/src/main/AndroidManifest.xml"
+          m = open(path).read()
+          flt = """
+                  <intent-filter>
+                      <action android:name="android.intent.action.VIEW" />
+                      <category android:name="android.intent.category.DEFAULT" />
+                      <category android:name="android.intent.category.BROWSABLE" />
+                      <data android:scheme="gtaradio" android:host="callback" />
+                  </intent-filter>
+              """
+          assert "</activity>" in m
+          m = m.replace("</activity>", flt + "</activity>", 1)
+          open(path, "w").write(m)
+          PY
           npx cap sync android
       - name: App icon
         run: |
