@@ -28,14 +28,20 @@ jobs:
           npx cap sync android
       - name: App icon
         run: |
-          RES=android-wrapper/android/app/src/main/res
-          rm -rf $RES/mipmap-anydpi-v26
-          for pair in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
-            d=${pair%%:*}; s=${pair##*:}
-            convert icon-512.png -resize ${s}x${s} $RES/mipmap-$d/ic_launcher.png
-            cp $RES/mipmap-$d/ic_launcher.png $RES/mipmap-$d/ic_launcher_round.png
-            cp $RES/mipmap-$d/ic_launcher.png $RES/mipmap-$d/ic_launcher_foreground.png 2>/dev/null || true
-          done
+          pip install pillow
+          python3 - <<'PY'
+          import os, shutil
+          from PIL import Image
+          res = "android-wrapper/android/app/src/main/res"
+          shutil.rmtree(res + "/mipmap-anydpi-v26", ignore_errors=True)   # use plain PNG icons instead of the default adaptive icon
+          src = Image.open("icon-512.png").convert("RGBA")
+          for d, size in {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}.items():
+              folder = f"{res}/mipmap-{d}"
+              if not os.path.isdir(folder): continue
+              icon = src.resize((size, size), Image.LANCZOS)
+              for name in ("ic_launcher.png", "ic_launcher_round.png", "ic_launcher_foreground.png"):
+                  icon.save(f"{folder}/{name}")
+          PY
       - name: Build debug APK
         working-directory: android-wrapper/android
         run: ./gradlew assembleDebug
