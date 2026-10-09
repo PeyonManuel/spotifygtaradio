@@ -478,16 +478,6 @@ async function loadHover(){
   try{ const r=await fetch("../hover.wav"); if(r.ok) hoverBuf=await decodeAny(await r.arrayBuffer()); }catch{}
 }
 loadHover();
-/* overlay opening sound: plays when the wheel is pulled up */
-let openBuf=null;
-(async()=>{ try{ const r=await fetch("open.wav"); if(r.ok) openBuf=await decodeAny(await r.arrayBuffer()); }catch{} })();
-function playOpen(){
-  try{
-    if(!openBuf) return; if(!actx) audioInit(); if(!actx) return;
-    const go=()=>{ const src=actx.createBufferSource(); src.buffer=openBuf; const g=actx.createGain(); g.gain.value=1; src.connect(g).connect(actx.destination); src.start(); };
-    if(actx.state!=="running") actx.resume().then(go).catch(()=>{}); else go();
-  }catch{}
-}
 function audioInit(){ try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==="suspended") actx.resume(); loadHover(); loadSwitchFile(); }catch{} }
 ["pointerdown","keydown","touchstart"].forEach(ev=>addEventListener(ev,audioInit,{passive:true}));
 function playTick(){
@@ -835,7 +825,7 @@ async function bootOverlay(){
   const arm=ms=>{ clearTimeout(ovTimer); ovTimer=setTimeout(()=>{ try{ GtaOverlayHost.close(); }catch{} },typeof ms==="number"?ms:1500); };   // closes 1.5 s after your last touch
   addEventListener("pointerdown",()=>clearTimeout(ovTimer),true);
   ["pointerup","pointercancel"].forEach(ev=>addEventListener(ev,arm,true));
-  window.ovOpen=idle=>{ clearTimeout(ovTimer); adoptCur(); if(!devId) refreshDevices(true); if(idle===true) arm(4500); document.documentElement.classList.add("open"); playOpen(); setHot(-1); hubStation(current===null?-1:current); };
+  window.ovOpen=idle=>{ clearTimeout(ovTimer); adoptCur(); if(!devId) refreshDevices(true); if(idle===true) arm(4500); document.documentElement.classList.add("open"); setHot(-1); hubStation(current===null?-1:current); };
   window.ovClose=()=>{ clearTimeout(ovTimer); stick=false; pressed=false; setHot(-1); document.documentElement.classList.remove("open"); };
   document.title="overlay-ready";
 }
