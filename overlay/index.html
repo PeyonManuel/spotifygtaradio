@@ -755,7 +755,7 @@ function setHot(i){
 function pointToIndex(e,free){
   const w=$("wheel"), r=w.getBoundingClientRect(), k=1000/r.width;
   const x=(e.clientX-r.left)*k-CX, y=(e.clientY-r.top)*k-CY, d=Math.hypot(x,y);
-  if(d<(free?250:300)||(!free&&d>500)||!angles.length) return -1;
+  if(d<(free?(OVERLAY?340:250):300)||(!free&&d>500)||!angles.length) return -1;
   const a=Math.atan2(y,x); let best=-1, bd=1e9;
   angles.forEach((ang,i)=>{ let diff=Math.abs(a-ang); diff=Math.min(diff,2*Math.PI-diff); if(diff<bd){ bd=diff; best=i; } });
   return best;
