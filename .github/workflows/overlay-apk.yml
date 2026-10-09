@@ -65,6 +65,24 @@ jobs:
           # our own activity + the overlay service (replace the generated MainActivity)
           cp native/*.java android/app/src/main/java/com/manuel/gtaoverlay/
           npx cap sync android
+          python3 - <<'PY'
+          # sign every build with the SAME key (overlay/app/signing.jks) so a new APK installs over the old one, and give each build a higher versionCode
+          import re
+          path = "android/app/build.gradle"
+          g = open(path).read()
+          g = g.replace("android {", """android {
+              signingConfigs {
+                  debug {
+                      storeFile file('../../signing.jks')
+                      storePassword 'android'
+                      keyAlias 'key'
+                      keyPassword 'android'
+                  }
+              }""", 1)
+          g, n = re.subn(r"versionCode\s+\d+", "versionCode ${{ github.run_number }}", g)
+          assert n == 1
+          open(path, "w").write(g)
+          PY
       - name: App icon
         run: |
           pip install pillow
