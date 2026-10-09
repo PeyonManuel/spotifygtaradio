@@ -46,7 +46,7 @@
   #radio { --accent:#fff; touch-action:none; }
   html { overscroll-behavior:none; }
   .st .in { transform-box:fill-box; transform-origin:center; transition:transform .12s; }
-  .st.hov .in { transform:scale(1.6); }                        /* the pointed station swells up, GTA style */
+  @media (hover:none) and (pointer:coarse) { .st.hov .in { transform:scale(1.6); } }   /* phones only: the pointed station swells up so your finger doesn't hide it */
   #hprev { display:none; }
   #np { display:none; text-align:center; max-width:92vw; padding:4px 14px 0; }
   #npTrack { font-weight:700; font-size:clamp(16px,5vw,24px); line-height:1.25; }
