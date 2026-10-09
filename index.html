@@ -161,6 +161,12 @@ const SCOPES = "streaming user-read-email user-read-private playlist-read-privat
 const PAGE = location.origin + location.pathname;
 // Inside the Android app, login happens in Chrome (so "Continue with Google" works) and comes back through this app link.
 const NATIVE = !!(window.Capacitor && typeof Capacitor.isNativePlatform==="function" && Capacitor.isNativePlatform());
+const nativePlugin = n => {
+  const C = window.Capacitor || {};
+  const p = (C.Plugins && C.Plugins[n]) || (typeof C.registerPlugin==="function" ? C.registerPlugin(n) : null);
+  if(!p) throw new Error("native plugin "+n+" not available");
+  return p;
+};
 const REDIRECT = NATIVE ? "gtaradio://callback" : PAGE;
 const EPOCH = Date.UTC(2020, 0, 1);               // shared "station start" clock
 const LAG = 350;                                   // ms it takes Spotify to start a track after we ask
@@ -191,7 +197,7 @@ async function login(){
   const url = "https://accounts.spotify.com/authorize?" + new URLSearchParams({
     client_id:cid, response_type:"code", redirect_uri:REDIRECT, scope:SCOPES,
     code_challenge_method:"S256", code_challenge:challenge });
-  if(NATIVE){ try{ await Capacitor.registerPlugin("Browser").open({ url }); return; }catch(e){ showErr("Couldn't open the login page: "+e.message); } }
+  if(NATIVE){ try{ await nativePlugin("Browser").open({ url }); return; }catch(e){ showErr("Couldn't open the login page: "+e.message); } }
   location.href = url;
 }
 async function tokenRequest(params){
@@ -744,8 +750,8 @@ function enterRadio(){ show("radio"); buildWheel(); setupMediaSession(); startPl
   if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
   if(NATIVE){                                         // the app link brings the Spotify answer back here
     try{
-      Capacitor.registerPlugin("App").addListener("appUrlOpen", async ({url})=>{
-        try{ Capacitor.registerPlugin("Browser").close(); }catch{}
+      nativePlugin("App").addListener("appUrlOpen", async ({url})=>{
+        try{ nativePlugin("Browser").close(); }catch{}
         const r=new URL(url).searchParams;
         if(r.get("code")){
           try{ await tokenRequest({ grant_type:"authorization_code", code:r.get("code"), redirect_uri:REDIRECT, code_verifier:sessionStorage.getItem("verifier")||LS.get("verifier") }); location.reload(); }
