@@ -1,6 +1,6 @@
 {
   "appId": "com.manuel.manufm",
-  "appName": "Manu FM",
+  "appName": "GTA Spotify Radio",
   "webDir": "www",
   "server": {
     "url": "https://peyonmanuel.github.io/spotifygtaradio/",

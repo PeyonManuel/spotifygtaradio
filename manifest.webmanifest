@@ -1,6 +1,6 @@
 {
-  "name": "Manu FM",
-  "short_name": "Manu FM",
+  "name": "GTA Spotify Radio",
+  "short_name": "GTA Spotify Radio",
   "description": "Your Spotify genre playlists as a radio with a station wheel",
   "start_url": "./",
   "scope": "./",

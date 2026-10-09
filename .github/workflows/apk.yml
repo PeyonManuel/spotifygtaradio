@@ -51,5 +51,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-${{ github.run_number }}
-          name: Manu FM APK ${{ github.run_number }}
+          name: GTA Spotify Radio APK ${{ github.run_number }}
           files: ManuFM.apk

@@ -1,4 +1,4 @@
-// Manu FM service worker: keeps the app shell available and installable.
+// GTA Spotify Radio service worker: keeps the app shell available and installable.
 // Network first, so a new version of the page is picked up as soon as you are online.
 const CACHE = "manu-fm-v23";
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png","./hover.wav","./switch.mp3"].concat(Array.from({length:29},(_,i)=>"./logos/"+String(i+1).padStart(2,"0")+".png"));

@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0d0d12">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
-<title>Manu FM</title>
+<title>GTA Spotify Radio</title>
 <style>
   :root { --bg:#0d0d12; --fg:#f2efe6; --dim:#8b8a93; --accent:#ffb000; --panel:#17171f; --S:min(100vw,100vh,980px); }
   @supports (height:100dvh) { :root { --S:min(100vw,100dvh,980px); } }
@@ -98,13 +98,13 @@
 
 <!-- LOADING -->
 <div class="screen on" id="s-load">
-  <h1>MANU FM</h1>
+  <h1>GTA SPOTIFY RADIO</h1>
   <p id="loadmsg">Loading…</p>
 </div>
 
 <!-- SETUP -->
 <div class="screen" id="s-setup">
-  <h1>MANU FM</h1>
+  <h1>GTA SPOTIFY RADIO</h1>
   <p>Your Spotify genre playlists as radio stations. Each one keeps "playing" while you're on another, so tuning in drops you mid-song.</p>
   <ol>
     <li>Go to <code>developer.spotify.com/dashboard</code> and create an app. Tick <b>Web Playback SDK</b> and <b>Web API</b>.</li>
@@ -133,7 +133,7 @@
     <div id="hub">
       <img id="hlogo" alt="" hidden>
       <div id="hfam"></div>
-      <div id="hname">MANU FM</div>
+      <div id="hname">GTA SPOTIFY RADIO</div>
       <div id="htrack">Tap a station to tune in</div>
       <div id="hartist"></div>
       <label id="volwrap" title="Volume"><button id="pp" type="button" title="Mute (Space)">&#128265;</button><input id="vol" type="range" min="0" max="1" step="0.01"><span>&#128266;</span></label>
@@ -358,7 +358,7 @@ function startPlayer(){
   if(MOBILE){ setStatus("Phone: audio plays through your Spotify app. Open Spotify once, pick this phone in the list, then tap a station."); return; }
   const init=()=>{
     if(inited) return; inited=true;
-    try{ player=new Spotify.Player({ name:"Manu FM", getOAuthToken:cb=>getToken().then(cb), volume:LS.get("vol",.8) }); }
+    try{ player=new Spotify.Player({ name:"GTA Spotify Radio", getOAuthToken:cb=>getToken().then(cb), volume:LS.get("vol",.8) }); }
     catch(e){ setStatus("This browser can't play audio itself. Pick a Spotify device below."); return; }
     player.addListener("ready",({device_id})=>{ sdkId=device_id; sdkOK=true; refreshDevices(); setStatus("Ready. Tap a station."); });
     player.addListener("not_ready",()=>{ sdkOK=false; });
@@ -603,7 +603,7 @@ function cleanTitle(raw){
 /* ---------- hub (the player in the middle) ---------- */
 function hubStation(i){                       // logo + name in the middle (the tuned station, or the one you point at)
   const im=$("hlogo"), st=stations[i];
-  if(!st){ $("hname").textContent="MANU FM"; im.hidden=true; return; }
+  if(!st){ $("hname").textContent="GTA SPOTIFY RADIO"; im.hidden=true; return; }
   const inf=stInfo(st); $("hname").textContent=inf.name;
   if(inf.logo){ im.src=`logos/${String(inf.logo).padStart(2,"0")}.png`; im.hidden=false; } else im.hidden=true;
 }
