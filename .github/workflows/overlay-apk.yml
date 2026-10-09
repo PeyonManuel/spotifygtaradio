@@ -44,6 +44,7 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
           """
           svc = """
               <service android:name=".OverlayService" android:exported="false" android:foregroundServiceType="specialUse">
@@ -52,7 +53,10 @@ jobs:
           """
           assert "<application" in m and "</application>" in m
           perms += """
-              <queries><package android:name="com.spotify.music" /></queries>
+              <queries>
+                  <package android:name="com.spotify.music" />
+                  <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent>
+              </queries>
           """
           m = m.replace("<application", perms + "<application", 1)
           m = m.replace("</application>", svc + "</application>", 1)

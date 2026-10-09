@@ -9,3 +9,16 @@ The wheel closes 1.5 s after your last touch (touch it again to keep it open). I
 * In the Spotify developer dashboard, add this redirect URI: `gtaoverlay://callback`.
 * First run in the app: log in, tap **Overlay: off** in the bottom menu, allow "Display over other apps", tap it again.
 * Tuning: `EDGE_GAP_DP`, `STRIP_W_DP`, `STRIP_H_FRACTION` at the top of `OverlayService.java`.
+
+## Options (bottom menu, only in the app)
+* **Swipe handle: on/off** - turn the edge handle off completely (then use the "Open wheel" button in the notification).
+* **Handle hint: on/off** - the faint line showing where the handle is (off by default).
+* **Return to app: on/off** - after Spotify had to be shown to wake it, go back to the app you were in. Needs "Usage access" (Android settings).
+
+## Waking Spotify
+No device found: the radio keeps "tuning", sends Spotify a background media-button press, refreshes the device list until the phone shows up,
+switches playback to it and plays. If Spotify still hasn't appeared after ~5 s it opens the Spotify app for a moment and then returns you to your app.
+
+## Known limit
+Android can't let a window both catch swipes and pass plain taps through, so the handle strip (20dp wide, 32% of the screen height, set 26dp in from the edge)
+does take taps on that sliver. Make it smaller, move it, or turn it off with the options above.

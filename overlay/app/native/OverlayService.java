@@ -1,10 +1,14 @@
 package com.manuel.gtaoverlay;
 
+import android.app.AppOpsManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.app.usage.UsageEvents;
+import android.app.usage.UsageStatsManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.content.res.Configuration;
@@ -15,9 +19,11 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.Process;
 import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.InputDevice;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -46,14 +52,16 @@ public class OverlayService extends Service {
     private static final String PAGE_URL = "https://" + PAGE_HOST + "/spotifygtaradio/overlay/?overlay=1";
     private static final String CHANNEL = "gta_overlay";
     private static final int EDGE_GAP_DP = 26;      // distance of the swipe strip from the screen edge (keeps clear of the system "back" gesture)
-    private static final int STRIP_W_DP = 28;
-    private static final float STRIP_H_FRACTION = 0.40f;
+    private static final int STRIP_W_DP = 20;
+    private static final float STRIP_H_FRACTION = 0.32f;
     private static final int SWIPE_DP = 36;         // how far you drag before the wheel opens
 
     private final Handler h = new Handler(Looper.getMainLooper());
     private WindowManager wm;
     private WebView web;
     private FrameLayout wheelHost, strip;
+    private View pill;
+    private boolean stripAttached = false;
     private WindowManager.LayoutParams wheelLp, stripLp;
     private boolean open = false;
 
@@ -91,9 +99,13 @@ public class OverlayService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && "STOP".equals(intent.getAction())) {
+        String a = intent == null ? null : intent.getAction();
+        if ("STOP".equals(a)) {
             stopSelf();
-            return START_NOT_STICKY;
+        } else if ("OPEN".equals(a)) {          // from the notification button: open the wheel without a swipe
+            if (wheelHost != null) openWheel(true);
+        } else if ("APPLY".equals(a)) {         // options changed in the app
+            applyOptions();
         }
         return START_NOT_STICKY;
     }
@@ -102,7 +114,7 @@ public class OverlayService extends Service {
     public void onDestroy() {
         running = false;
         h.removeCallbacksAndMessages(null);
-        try { if (strip != null) wm.removeView(strip); } catch (Exception ignored) {}
+        try { if (strip != null && stripAttached) wm.removeView(strip); } catch (Exception ignored) {}
         try { if (wheelHost != null) wm.removeView(wheelHost); } catch (Exception ignored) {}
         if (web != null) { web.destroy(); web = null; }
         super.onDestroy();
@@ -111,7 +123,7 @@ public class OverlayService extends Service {
     @Override
     public void onConfigurationChanged(Configuration c) {
         super.onConfigurationChanged(c);
-        if (strip != null) {
+        if (strip != null && stripAttached) {
             stripLp.height = (int) (getResources().getDisplayMetrics().heightPixels * STRIP_H_FRACTION);
             try { wm.updateViewLayout(strip, stripLp); } catch (Exception ignored) {}
         }
@@ -136,6 +148,9 @@ public class OverlayService extends Service {
         int immutable = Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0;
         Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
         if (launch != null) b.setContentIntent(PendingIntent.getActivity(this, 0, launch, immutable | PendingIntent.FLAG_UPDATE_CURRENT));
+        Intent open = new Intent(this, OverlayService.class).setAction("OPEN");
+        b.addAction(android.R.drawable.ic_media_play, "Open wheel",
+                PendingIntent.getService(this, 2, open, immutable | PendingIntent.FLAG_UPDATE_CURRENT));
         Intent stop = new Intent(this, OverlayService.class).setAction("STOP");
         b.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Turn off",
                 PendingIntent.getService(this, 1, stop, immutable | PendingIntent.FLAG_UPDATE_CURRENT));
@@ -186,7 +201,7 @@ public class OverlayService extends Service {
     private void buildStrip() {
         strip = new FrameLayout(this);
         strip.setBackgroundColor(0x01000000);                // practically invisible, but it still receives touches
-        View pill = new View(this);                           // a faint hint of where to swipe
+        pill = new View(this);                                // a faint hint of where to swipe (off by default, see options)
         GradientDrawable g = new GradientDrawable();
         g.setColor(0x44FFFFFF);
         g.setCornerRadius(dp(2));
@@ -204,7 +219,22 @@ public class OverlayService extends Service {
                 PixelFormat.TRANSLUCENT);
         stripLp.gravity = Gravity.RIGHT | Gravity.CENTER_VERTICAL;
         stripLp.x = dp(EDGE_GAP_DP);
-        wm.addView(strip, stripLp);
+        applyOptions();
+    }
+
+    /** Reads the options saved by the app: "handle" (the swipe strip at all) and "hint" (the faint line showing where it is). */
+    private void applyOptions() {
+        if (strip == null) return;
+        pill.setVisibility(opt(this, "hint", false) ? View.VISIBLE : View.GONE);
+        boolean want = opt(this, "handle", true);
+        try {
+            if (want && !stripAttached) { wm.addView(strip, stripLp); stripAttached = true; }
+            else if (!want && stripAttached) { wm.removeView(strip); stripAttached = false; }
+        } catch (Exception ignored) {}
+    }
+
+    public static boolean opt(Context c, String key, boolean def) {
+        return c.getSharedPreferences("opts", Context.MODE_PRIVATE).getBoolean(key, def);
     }
 
     private boolean onStripTouch(MotionEvent e) {
@@ -217,7 +247,7 @@ public class OverlayService extends Service {
                     float dx = sx - e.getRawX(), dy = Math.abs(e.getRawY() - sy);
                     if (dx > dp(SWIPE_DP) && dx > dy * 1.2f) {         // a leftward swipe
                         forwarding = true;
-                        openWheel();
+                        openWheel(false);
                         downTime = SystemClock.uptimeMillis();
                         forward(MotionEvent.ACTION_DOWN, e.getRawX(), e.getRawY());
                     }
@@ -256,14 +286,14 @@ public class OverlayService extends Service {
         ev.recycle();
     }
 
-    private void openWheel() {
+    private void openWheel(boolean idle) {
         h.removeCallbacks(hideRun);
         if (!open) {
             open = true;
             wheelLp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
             wheelLp.alpha = 1f;
             try { wm.updateViewLayout(wheelHost, wheelLp); } catch (Exception ignored) {}
-            eval("window.ovOpen&&ovOpen()");
+            eval("window.ovOpen&&ovOpen(" + idle + ")");
         }
         bumpWatchdog();
     }
@@ -285,11 +315,29 @@ public class OverlayService extends Service {
         if (web != null) web.evaluateJavascript(js, null);
     }
 
-    /** Brings the Spotify app up (so it shows as a playback device). Allowed from the background because the app may draw over other apps. */
-    public static void openSpotify(android.content.Context c) {
+    /**
+     * Wakes Spotify so it shows up as a playback device.
+     * front=false: a media-button press sent to Spotify, which starts it in the background (no screen change).
+     * front=true: opens the Spotify app (allowed from the background because we may draw over other apps); the app you were in is
+     * remembered (only if "usage access" is allowed) so returnToPrevious() can take you back.
+     */
+    private static String prevPkg = null;
+
+    public static void openSpotify(Context c, boolean front) {
+        if (!front) {
+            try {
+                for (int action : new int[]{KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP}) {
+                    Intent i = new Intent(Intent.ACTION_MEDIA_BUTTON).setPackage("com.spotify.music");
+                    i.putExtra(Intent.EXTRA_KEY_EVENT, new KeyEvent(action, KeyEvent.KEYCODE_MEDIA_PLAY));
+                    c.sendBroadcast(i);
+                }
+            } catch (Exception ignored) {}
+            return;
+        }
+        prevPkg = lastForegroundApp(c);
         try {
             Intent i = c.getPackageManager().getLaunchIntentForPackage("com.spotify.music");
-            if (i != null) { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); c.startActivity(i); return; }
+            if (i != null) { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION); c.startActivity(i); return; }
         } catch (Exception ignored) {}
         try {
             Intent i = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse("spotify:"));
@@ -298,11 +346,53 @@ public class OverlayService extends Service {
         } catch (Exception ignored) {}
     }
 
+    /** Takes you back to the app you were using before Spotify had to be shown (or to the home screen). */
+    public static void returnToPrevious(Context c) {
+        String p = prevPkg; prevPkg = null;
+        if (p == null) return;
+        try {
+            Intent i = c.getPackageManager().getLaunchIntentForPackage(p);
+            if (i == null) i = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            c.startActivity(i);
+        } catch (Exception ignored) {}
+    }
+
+    public static boolean hasUsageAccess(Context c) {
+        try {
+            AppOpsManager ops = (AppOpsManager) c.getSystemService(Context.APP_OPS_SERVICE);
+            return ops.checkOpNoThrow("android:get_usage_stats", Process.myUid(), c.getPackageName()) == AppOpsManager.MODE_ALLOWED;
+        } catch (Exception e) { return false; }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static String lastForegroundApp(Context c) {
+        if (!hasUsageAccess(c)) return null;
+        try {
+            UsageStatsManager u = (UsageStatsManager) c.getSystemService(Context.USAGE_STATS_SERVICE);
+            long now = System.currentTimeMillis();
+            UsageEvents ev = u.queryEvents(now - 5 * 60 * 1000L, now);
+            UsageEvents.Event e = new UsageEvents.Event();
+            String last = null;
+            while (ev.hasNextEvent()) {
+                ev.getNextEvent(e);
+                if (e.getEventType() != UsageEvents.Event.MOVE_TO_FOREGROUND) continue;
+                String p = e.getPackageName();
+                if (p == null || p.equals(c.getPackageName()) || p.equals("com.spotify.music") || p.equals("com.android.systemui")) continue;
+                last = p;
+            }
+            return last;
+        } catch (Exception ex) { return null; }
+    }
+
     private class Host {
         @JavascriptInterface
         public void close() { h.post(OverlayService.this::closeWheel); }
 
         @JavascriptInterface
-        public void openSpotify() { h.post(() -> OverlayService.openSpotify(OverlayService.this)); }
+        public void openSpotify(String mode) { h.post(() -> OverlayService.openSpotify(OverlayService.this, "front".equals(mode))); }
+
+        @JavascriptInterface
+        public void returnToPrevious() { h.post(() -> OverlayService.returnToPrevious(OverlayService.this)); }
     }
 }

@@ -128,7 +128,37 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public void openSpotify() { runOnUiThread(() -> OverlayService.openSpotify(MainActivity.this)); }
+        public void openSpotify(String mode) { runOnUiThread(() -> OverlayService.openSpotify(MainActivity.this, "front".equals(mode))); }
+
+        @JavascriptInterface
+        public void returnToPrevious() { runOnUiThread(() -> OverlayService.returnToPrevious(MainActivity.this)); }
+
+        @JavascriptInterface
+        public String getOptions() {
+            try {
+                JSONObject o = new JSONObject();
+                o.put("handle", OverlayService.opt(MainActivity.this, "handle", true));
+                o.put("hint", OverlayService.opt(MainActivity.this, "hint", false));
+                        o.put("back", OverlayService.hasUsageAccess(MainActivity.this));
+                return o.toString();
+            } catch (Exception e) { return "{}"; }
+        }
+
+        @JavascriptInterface
+        public void setOption(String key, boolean value) {
+            getSharedPreferences("opts", MODE_PRIVATE).edit().putBoolean(key, value).apply();
+            if (OverlayService.running) {                                   // apply right away
+                runOnUiThread(() -> {
+                    Intent i = new Intent(MainActivity.this, OverlayService.class).setAction("APPLY");
+                    if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
+                });
+            }
+        }
+
+        @JavascriptInterface
+        public void requestUsageAccess() {
+            runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)));
+        }
 
         @JavascriptInterface
         public void overlayStop() {

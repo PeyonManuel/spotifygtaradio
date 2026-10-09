@@ -86,7 +86,7 @@
   #foot select { background:#17171f; color:var(--fg); border:1px solid #333; border-radius:8px; padding:7px 8px; font-size:13px; max-width:46vw; }
   #foot button.mini { margin:0; padding:7px 10px; font-size:12px; background:#262632; color:var(--fg); }
   #foot input[type=range] { width:90px; vertical-align:middle; accent-color:var(--accent); }
-  #ovBtn[hidden] { display:none; }
+  #ovBtn[hidden], #ovHandle[hidden], #ovHint[hidden], #ovBack[hidden] { display:none; }
   /* overlay mode (loaded by the Android app on top of other apps): only the wheel, dimmed background, fades in/out */
   html.ov, html.ov body { background:transparent !important; touch-action:none; overflow:hidden; }
   html.ov #foot, html.ov #handle, html.ov #np, html.ov #volwrap, html.ov #hprev, html.ov #hfam, html.ov #err, html.ov #htrack, html.ov #hartist { display:none !important; }
@@ -154,6 +154,9 @@
     <button class="mini" id="refPl">Refresh playlists</button>
     <button class="mini" id="chPl">Change playlists</button>
     <button class="mini" id="ovBtn" hidden>Overlay</button>
+    <button class="mini" id="ovHandle" hidden>Handle</button>
+    <button class="mini" id="ovHint" hidden>Hint</button>
+    <button class="mini" id="ovBack" hidden>Return</button>
     <button class="mini" id="out">Sign out</button>
     <span id="st"></span>
   </div>
@@ -392,7 +395,7 @@ function startPlayer(){
   if(window.Spotify||window.__sdkReady) init();
 }
 
-async function refreshDevices(){
+async function refreshDevices(phone){
   try{ const j=await api("GET","/me/player/devices"); devices=(j&&j.devices)||[]; }
   catch(e){ devices=[]; setStatus("Couldn't list devices: "+e.message); }
   const sel=$("dev"); sel.innerHTML="";
@@ -402,11 +405,12 @@ async function refreshDevices(){
   if(!opts.length){ sel.innerHTML='<option value="">No device found: open Spotify on your phone</option>'; devId=null; updateVolUI(); return; }
   opts.forEach(o=>{ const e=document.createElement("option"); e.value=o.v; e.textContent=o.name; sel.append(e); });
   const want=LS.get("dev",null), act=devices.find(d=>d.is_active&&d.id!==sdkId);
-  const pick=opts.find(o=>o.v===want)||opts.find(o=>o.v==="sdk")||(act&&opts.find(o=>o.v===act.id))||opts[0];
-  sel.value=pick.v; devId=pick.v; updateVolUI();
+  const ph=phone&&devices.find(d=>/smartphone/i.test(d.type||"")&&!d.is_restricted&&d.id!==sdkId);
+  const pick=(ph&&opts.find(o=>o.v===ph.id))||opts.find(o=>o.v===want)||opts.find(o=>o.v==="sdk")||(act&&opts.find(o=>o.v===act.id))||opts[0];
+  sel.value=pick.v; devId=pick.v; if(ph&&pick.v===ph.id) LS.set("dev",ph.id); updateVolUI();
 }
 $("dev").onchange=()=>{ devId=$("dev").value||null; LS.set("dev",devId); updateVolUI(); if(current!==null&&devId) tune(current); };
-$("devRef").onclick=refreshDevices;
+$("devRef").onclick=()=>refreshDevices();
 function updateVolUI(){ $("volwrap").style.display="flex"; }
 $("vol").value=LS.get("vol",.8);
 $("vol").oninput=()=>{ const v=+$("vol").value; LS.set("vol",v); if(muted){ muted=false; updatePP(); } if(player&&devId==="sdk") player.setVolume(v); else { clearTimeout(volT); volT=setTimeout(applyVolume,150); } };
@@ -489,13 +493,13 @@ function hoverTick(){
   }
   lastTick=now; playTick();
 }
-function startStatic(delay){
+function startStatic(delay,maxMs){
   try{
     actx=actx||new (window.AudioContext||window.webkitAudioContext)();
     if(actx.state==="suspended") actx.resume();
     if(noise){ const o=noise; noise=null; clearTimeout(o.timer); try{ if(o.src){ o.g.gain.value=0; o.src.stop(); } }catch{} }
     const me={src:null,g:null,t:Date.now()}; noise=me;
-    me.timer=setTimeout(()=>stopStatic(),7000);                             // never leave it hissing forever
+    me.timer=setTimeout(()=>stopStatic(),maxMs||7000);                             // never leave it hissing forever
     const go=()=>{ if(noise!==me) return; try{
       const src=actx.createBufferSource(); src.buffer=noiseBuffer(); src.loop=true;
       const f=actx.createBiquadFilter(); f.type="bandpass"; f.frequency.value=2400; f.Q.value=.5;
@@ -518,7 +522,7 @@ function stopStatic(now){
 async function waitForStart(uri,seq){
   const t0=Date.now();
   while(noise&&seq===tuneSeq&&Date.now()-t0<12000){
-    try{ const d=await api("GET","/me/player"); if(d&&d.is_playing&&d.item&&(d.item.uri===uri||(d.item.linked_from&&d.item.linked_from.uri===uri)||(d.progress_ms>1500&&Date.now()-t0>2500))){ stopStatic(); return; } }catch{}
+    try{ const d=await api("GET","/me/player"); if(d&&d.is_playing&&d.item&&(d.item.uri===uri||(d.item.linked_from&&d.item.linked_from.uri===uri)||(d.progress_ms>1500&&Date.now()-t0>2500))){ stopStatic(); returnPrev(); return; } }catch{}
     await sleep(400);
   }
 }
@@ -531,23 +535,35 @@ const TUNE_DEBOUNCE=280, TUNE_MIN_GAP=450;
 function tune(i,opts){
   const quiet=!!(opts&&opts.quiet);      // quiet = silent re-sync: no static, no change on screen
   const dev=target();
-  if(!dev){ wakeAndRetune(i); return; }                      // no Spotify device known: look again, and open the Spotify app if needed
   if(devId==="sdk"&&player){ try{ player.activateElement(); }catch{} }
   current=i; lastTune=Date.now(); misses=0; if(muted) setTimeout(applyVolume,600); publishCur();
-  if(!quiet){ expectUri=null; const sd=switchSound(); startStatic(sd); markOn(); showStation(); lastUri=null; }
+  if(!quiet){ expectUri=null; const sd=switchSound(); startStatic(sd,dev?7000:30000); markOn(); showStation(); lastUri=null; }   // no device yet: keep "tuning" for longer while Spotify wakes up
+  if(!dev){ wakeAndRetune(i,quiet); return; }
   pending={i,quiet:quiet&&(!pending||pending.quiet)};     // a real tune always wins over a quiet re-sync
   clearTimeout(sendTimer); sendTimer=setTimeout(pump,quiet?0:TUNE_DEBOUNCE);
 }
-/* No device to play on (Spotify app closed): open the Spotify app, wait for it to show up, then tune. */
-let waking=false, wakeWant=null, lastWake=0;
-function wakeSpotify(){ try{ (window.GtaNative||window.GtaOverlayHost).openSpotify(); }catch{} }
-async function wakeAndRetune(i){
-  wakeWant=i; if(waking) return; waking=true;
+/* No device to play on (Spotify app closed): wake Spotify in the background (media button), and only if that fails bring it up
+   on screen; keep the radio "tuning" meanwhile, switch to this phone as soon as it shows up, play, then go back to the app you were in. */
+let waking=false, wakeWant=null, wakeQuiet=false, lastWake=0, wokeFront=false;
+const hostApi=()=>window.GtaNative||window.GtaOverlayHost;
+function wakeSpotify(mode){ try{ hostApi().openSpotify(mode); }catch{} }
+function returnPrev(){ if(!wokeFront) return; wokeFront=false; try{ hostApi().returnToPrevious(); }catch{} }
+async function wakeAndRetune(i,quiet){
+  wakeWant=i; wakeQuiet=quiet&&(!waking||wakeQuiet);
+  if(waking) return; waking=true; lastWake=Date.now();
   try{
-    await refreshDevices(); if(target()){ tune(wakeWant); return; }
-    lastWake=Date.now(); wakeSpotify(); setStatus("Opening Spotify…");
-    for(let k=0;k<20&&!target();k++){ await sleep(1000); await refreshDevices(); }
-    if(target()) tune(wakeWant); else setStatus("Spotify didn't show up. Open it, then tap a station.");
+    if(noise&&!wakeQuiet){ clearTimeout(noise.timer); noise.timer=setTimeout(()=>stopStatic(),30000); }
+    await refreshDevices(true);
+    if(!target()){
+      setStatus("Opening Spotify…"); wakeSpotify("quiet");                    // no screen change
+      for(let k=0;k<40&&!target();k++){
+        await sleep(500); await refreshDevices(true);
+        if(k===9&&!target()){ wokeFront=true; wakeSpotify("front"); }          // 5 s and still nothing: show the Spotify app for a moment
+      }
+    }
+    if(!target()){ stopStatic(true); wokeFront=false; setStatus("Spotify didn't show up. Open it, then tap a station."); return; }
+    await refreshDevices(true);                                                // pick this phone
+    pending={i:wakeWant,quiet:wakeQuiet}; clearTimeout(sendTimer); sendTimer=setTimeout(pump,0);
   } finally { waking=false; }
 }
 async function pump(){
@@ -581,7 +597,7 @@ async function sendTune(i,quiet){
     setStatus("");
   }catch(e){
     if(!quiet&&i===current) stopStatic(true);
-    if(e.status===404&&i===current&&Date.now()-lastWake>15000){ lastWake=Date.now(); wakeSpotify(); setStatus("Opening Spotify…"); await sleep(3500); await refreshDevices(); if(i===current&&target()) tune(i); return; }   // "no active device": wake the Spotify app and retry once
+    if(e.status===404&&i===current&&!waking&&Date.now()-lastWake>15000){ devId=null; wakeAndRetune(i,quiet); return; }   // "no active device": wake Spotify and retry
     setStatus("Couldn't tune: "+e.message+(e.status===404?" Open Spotify on that device, then try again.":"")); }
 }
 /* the app page and the overlay page are two windows of the same app: they tell each other which station is tuned (screen only, no extra Spotify call) */
@@ -769,7 +785,7 @@ $("refPl").onclick=()=>{ LS.del("cache3"); location.hash=""; location.reload(); 
 $("chPl").onclick=()=>{ location.hash="#pick"; location.reload(); };
 $("out").onclick=()=>{ LS.del("tok"); LS.del("cache3"); location.hash=""; location.reload(); };
 
-function enterRadio(){ show("radio"); buildWheel(); setupMediaSession(); startPlayer(); refreshDevices(); updatePP(); adoptCur(); ovInit(); }
+function enterRadio(){ show("radio"); buildWheel(); setupMediaSession(); startPlayer(); refreshDevices(true); updatePP(); adoptCur(); ovInit(); }
 /* Android app only: the "over other apps" wheel (swipe in from the right edge of the screen, anywhere) */
 let ovDone=false;
 async function ovInit(){
@@ -786,7 +802,16 @@ async function ovInit(){
     }catch(e){ showErr("Overlay: "+(e.message||e)); }
     setTimeout(refresh,400);
   };
-  refresh(); document.addEventListener("visibilitychange",()=>{ if(!document.hidden) refresh(); });
+  // options: swipe handle on/off, handle hint on/off, return to the previous app after waking Spotify (needs "usage access")
+  const opts=()=>{ try{ return JSON.parse(GtaNative.getOptions()); }catch{ return {}; } };
+  const ob={handle:$("ovHandle"),hint:$("ovHint"),back:$("ovBack")};
+  Object.values(ob).forEach(x=>x.hidden=false);
+  const paint=()=>{ const o=opts(); ob.handle.textContent="Swipe handle: "+(o.handle?"on":"off"); ob.hint.textContent="Handle hint: "+(o.hint?"on":"off"); ob.back.textContent="Return to app: "+(o.back?"on":"off"); };
+  ob.handle.onclick=()=>{ GtaNative.setOption("handle",!opts().handle); setTimeout(paint,200); };
+  ob.hint.onclick=()=>{ GtaNative.setOption("hint",!opts().hint); setTimeout(paint,200); };
+  ob.back.onclick=()=>{ if(opts().back) setStatus("Return to app is on. To turn it off, remove 'Usage access' for this app in Android settings."); else { GtaNative.requestUsageAccess(); setStatus("Allow usage access for this app, come back, and it can return you to your app after waking Spotify."); } wakeFoot(); };
+  paint();
+  refresh(); document.addEventListener("visibilitychange",()=>{ if(!document.hidden){ refresh(); paint(); } });
 }
 
 /* ---------- boot ---------- */
@@ -795,12 +820,12 @@ let ovTimer=null;
 async function bootOverlay(){
   const cached=LS.get("tok")&&loadCache();
   if(!cached) return;                                   // log in / build the radio in the app first
-  stations=orderAndGroup(cached); show("radio"); buildWheel(); refreshDevices(); adoptCur();
+  stations=orderAndGroup(cached); show("radio"); buildWheel(); refreshDevices(true); adoptCur();
   if(current===null){ const c=LS.get("curst",null); if(c&&stations[c.i]){ current=c.i; markOn(); hubStation(current); } }
-  const arm=()=>{ clearTimeout(ovTimer); ovTimer=setTimeout(()=>{ try{ GtaOverlayHost.close(); }catch{} },1500); };   // closes 1.5 s after your last touch
+  const arm=ms=>{ clearTimeout(ovTimer); ovTimer=setTimeout(()=>{ try{ GtaOverlayHost.close(); }catch{} },typeof ms==="number"?ms:1500); };   // closes 1.5 s after your last touch
   addEventListener("pointerdown",()=>clearTimeout(ovTimer),true);
   ["pointerup","pointercancel"].forEach(ev=>addEventListener(ev,arm,true));
-  window.ovOpen=()=>{ clearTimeout(ovTimer); adoptCur(); if(!devId) refreshDevices(); document.documentElement.classList.add("open"); setHot(-1); hubStation(current===null?-1:current); };
+  window.ovOpen=idle=>{ clearTimeout(ovTimer); adoptCur(); if(!devId) refreshDevices(true); if(idle===true) arm(4500); document.documentElement.classList.add("open"); setHot(-1); hubStation(current===null?-1:current); };
   window.ovClose=()=>{ clearTimeout(ovTimer); stick=false; pressed=false; setHot(-1); document.documentElement.classList.remove("open"); };
   document.title="overlay-ready";
 }
