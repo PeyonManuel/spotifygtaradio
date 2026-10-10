@@ -52,6 +52,8 @@ public class MainActivity extends Activity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
+        if (Build.VERSION.SDK_INT >= 33) s.setAlgorithmicDarkeningAllowed(false);      // don't let Android's dark mode invert the page ("negative colours")
+        else if (Build.VERSION.SDK_INT >= 29) s.setForceDark(WebSettings.FORCE_DARK_OFF);
         web.setBackgroundColor(Color.parseColor("#0d0d12"));
         web.addJavascriptInterface(new Native(), "GtaNative");
         web.setWebViewClient(new WebViewClient() {
