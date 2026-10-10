@@ -329,7 +329,7 @@ function saveCache(){
 }
 function loadCache(){
   const c=LS.get("cache3",null);
-  if(!c||!c.list||!c.list.length||Date.now()-c.t>12*3600e3) return null;
+  if(!c||!c.list||!c.list.length) return null;     // no expiry: the station list stays until you tap "Refresh playlists"
   try{ return c.list.map(s=>{ const tracks=s.tr.map(a=>({uri:a[0],name:a[1],artist:a[2],dur:a[3]})); return {id:s.id,name:s.name,tracks,total:tracks.reduce((x,t)=>x+t.dur,0)}; }); }
   catch{ return null; }
 }
@@ -836,7 +836,8 @@ async function bootOverlay(){
   if(current===null){ const c=LS.get("curst",null); if(c&&stations[c.i]){ current=c.i; markOn(); hubStation(current); } }
   const arm=ms=>{ clearTimeout(ovTimer); ovTimer=setTimeout(()=>{ try{ GtaOverlayHost.close(); }catch{} },typeof ms==="number"?ms:1500); };   // closes 1.5 s after your last touch
   addEventListener("pointerdown",()=>clearTimeout(ovTimer),true);
-  ["pointerup","pointercancel"].forEach(ev=>addEventListener(ev,arm,true));
+  addEventListener("pointerup",e=>arm(pointToIndex(e,true)<0?150:1500),true);   // lifted on a station: 1.5 s; lifted in the middle (nothing selected): almost instantly
+  addEventListener("pointercancel",()=>arm(150),true);
   window.ovOpen=idle=>{ clearTimeout(ovTimer); adoptCur(); if(!devId) refreshDevices(true); if(idle===true) arm(4500); document.documentElement.classList.add("open"); setHot(-1); hubStation(current===null?-1:current); };
   window.ovClose=()=>{ clearTimeout(ovTimer); stick=false; pressed=false; setHot(-1); document.documentElement.classList.remove("open"); };
   document.title="overlay-ready";
