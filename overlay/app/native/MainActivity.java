@@ -7,8 +7,11 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -31,21 +34,10 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#0d0d12"));
-        // Newer Android draws apps edge to edge (under the status bar). Pad the page by the system bars ourselves so the top isn't hidden or cut.
-        getWindow().setStatusBarColor(Color.parseColor("#0d0d12"));
-        getWindow().setNavigationBarColor(Color.parseColor("#0d0d12"));
-        root.setOnApplyWindowInsetsListener((v, insets) -> {
-            int l, t, r, bt;
-            if (Build.VERSION.SDK_INT >= 30) {
-                android.graphics.Insets i = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-                l = i.left; t = i.top; r = i.right; bt = i.bottom;
-            } else {
-                l = insets.getSystemWindowInsetLeft(); t = insets.getSystemWindowInsetTop();
-                r = insets.getSystemWindowInsetRight(); bt = insets.getSystemWindowInsetBottom();
-            }
-            v.setPadding(l, t, r, bt);
-            return Build.VERSION.SDK_INT >= 30 ? WindowInsets.CONSUMED : insets.consumeSystemWindowInsets();
-        });
+        // full screen: no status bar / header strip on top, no navigation bar (swipe from the edge to bring them back for a moment)
+        if (Build.VERSION.SDK_INT >= 28) getWindow().getAttributes().layoutInDisplayCutoutMode =
+                Build.VERSION.SDK_INT >= 30 ? WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                                            : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
 
         web = new WebView(this);
         WebSettings s = web.getSettings();
@@ -66,7 +58,7 @@ public class MainActivity extends Activity {
         });
         root.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
-        root.requestApplyInsets();
+        goFullscreen();
 
         takeLink(getIntent());
         web.loadUrl(PAGE_URL);
@@ -83,6 +75,28 @@ public class MainActivity extends Activity {
     public void onBackPressed() {
         if (web != null && web.canGoBack()) web.goBack();
         else moveTaskToBack(true);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void goFullscreen() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            getWindow().setDecorFitsSystemWindows(false);
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c != null) {
+                c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+        }
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) goFullscreen();
     }
 
     @Override
