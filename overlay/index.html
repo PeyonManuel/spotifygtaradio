@@ -17,7 +17,7 @@
   .screen.on { display:block; }
   .screen.full { width:100%; background:none; padding:0; margin:0; border-radius:0; }
   .screen.full.on { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; }
-  h1 { margin:0 0 6px; letter-spacing:.12em; color:var(--accent); font-size:28px; }
+  h1 { display:none; margin:0 0 6px; letter-spacing:.12em; color:var(--accent); font-size:28px; }
   p, li { color:var(--dim); line-height:1.5; font-size:14px; }
   code { background:#0d0d12; padding:2px 6px; border-radius:4px; color:var(--fg); user-select:all; word-break:break-all; }
   input[type=text] { width:100%; padding:10px; border-radius:8px; border:1px solid #333; background:#0d0d12; color:var(--fg); font-size:14px; }
@@ -141,7 +141,7 @@
     <div id="hub">
       <img id="hlogo" alt="" hidden>
       <div id="hfam"></div>
-      <div id="hname">GTA SPOTIFY RADIO</div>
+      <div id="hname"></div>
       <div id="htrack">Tap a station to tune in</div>
       <div id="hartist"></div>
       <label id="volwrap" title="Volume"><button id="pp" type="button" title="Mute (Space)">&#128265;</button><input id="vol" type="range" min="0" max="1" step="0.01"><span>&#128266;</span></label>
@@ -672,7 +672,7 @@ function cleanTitle(raw){
 /* ---------- hub (the player in the middle) ---------- */
 function hubStation(i){                       // logo + name in the middle (the tuned station, or the one you point at)
   const im=$("hlogo"), st=stations[i];
-  if(!st){ $("hname").textContent="GTA SPOTIFY RADIO"; im.hidden=true; return; }
+  if(!st){ $("hname").textContent=""; im.hidden=true; return; }
   const inf=stInfo(st); $("hname").textContent=inf.name;
   if(inf.logo){ im.src=`../logos/${String(inf.logo).padStart(2,"0")}.png`; im.hidden=false; } else im.hidden=true;
 }
