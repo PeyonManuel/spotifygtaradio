@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -30,7 +31,21 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#0d0d12"));
-        root.setFitsSystemWindows(true);
+        // Newer Android draws apps edge to edge (under the status bar). Pad the page by the system bars ourselves so the top isn't hidden or cut.
+        getWindow().setStatusBarColor(Color.parseColor("#0d0d12"));
+        getWindow().setNavigationBarColor(Color.parseColor("#0d0d12"));
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            int l, t, r, bt;
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets i = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                l = i.left; t = i.top; r = i.right; bt = i.bottom;
+            } else {
+                l = insets.getSystemWindowInsetLeft(); t = insets.getSystemWindowInsetTop();
+                r = insets.getSystemWindowInsetRight(); bt = insets.getSystemWindowInsetBottom();
+            }
+            v.setPadding(l, t, r, bt);
+            return Build.VERSION.SDK_INT >= 30 ? WindowInsets.CONSUMED : insets.consumeSystemWindowInsets();
+        });
 
         web = new WebView(this);
         WebSettings s = web.getSettings();
@@ -49,6 +64,7 @@ public class MainActivity extends Activity {
         });
         root.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
+        root.requestApplyInsets();
 
         takeLink(getIntent());
         web.loadUrl(PAGE_URL);
