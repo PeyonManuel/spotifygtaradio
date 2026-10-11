@@ -2,6 +2,7 @@
 
 A separate app from the main radio. It shows the same radio, plus a **wheel you can pull up over any app**:
 swipe right on the thin handle near the left edge of the screen, slide to a station while still holding, lift your finger.
+**Move the handle:** hold your finger on it for half a second (it lights up and buzzes), then drag. It follows you up and down and jumps to whichever screen edge is closer; the new place is saved. Swipe direction follows the edge: right from the left edge, left from the right edge.
 The wheel closes 1.5 s after your last touch (touch it again to keep it open). If Spotify isn't running, it opens Spotify first.
 
 * The page lives in `overlay/index.html` (published at `/spotifygtaradio/overlay/` on GitHub Pages). The main page is untouched.

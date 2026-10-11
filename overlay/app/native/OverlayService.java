@@ -69,6 +69,25 @@ public class OverlayService extends Service {
     private boolean open = false;
 
     private float sx, sy;
+    // handle position (saved): which edge, and height as a fraction of the screen from the vertical centre
+    private boolean handleLeft = true;
+    private float handleY = -STRIP_UP_FRACTION;
+    private boolean stripDown = false, moving = false;
+    private int baseY;
+    private float baseCenter;
+    private final Runnable startMove = new Runnable() {
+        @Override public void run() {                          // held still on the handle: pick it up
+            if (!stripDown || forwarding || strip == null) return;
+            moving = true;
+            int[] loc = new int[2];
+            strip.getLocationOnScreen(loc);
+            baseCenter = loc[1] + strip.getHeight() / 2f;
+            baseY = stripLp.y;
+            strip.setBackgroundColor(0x33FFFFFF);
+            pill.setVisibility(View.VISIBLE);
+            strip.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+        }
+    };
     private boolean forwarding = false;
     private long downTime = 0;
 
@@ -128,7 +147,7 @@ public class OverlayService extends Service {
         super.onConfigurationChanged(c);
         if (strip != null && stripAttached) {
             stripLp.height = (int) (getResources().getDisplayMetrics().heightPixels * STRIP_H_FRACTION);
-            stripLp.y = -(int) (getResources().getDisplayMetrics().heightPixels * STRIP_UP_FRACTION);
+            stripLp.y = (int) (getResources().getDisplayMetrics().heightPixels * handleY);
             try { wm.updateViewLayout(strip, stripLp); } catch (Exception ignored) {}
         }
     }
@@ -212,9 +231,7 @@ public class OverlayService extends Service {
         g.setColor(0x44FFFFFF);
         g.setCornerRadius(dp(2));
         pill.setBackground(g);
-        FrameLayout.LayoutParams pl = new FrameLayout.LayoutParams(dp(4), dp(72), Gravity.CENTER_VERTICAL | Gravity.LEFT);
-        pl.leftMargin = dp(2);
-        strip.addView(pill, pl);
+        strip.addView(pill, new FrameLayout.LayoutParams(dp(4), dp(72), Gravity.CENTER_VERTICAL | Gravity.LEFT));
         strip.setOnTouchListener((v, e) -> onStripTouch(e));
 
         stripLp = new WindowManager.LayoutParams(
@@ -223,9 +240,11 @@ public class OverlayService extends Service {
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 PixelFormat.TRANSLUCENT);
-        stripLp.gravity = Gravity.LEFT | Gravity.CENTER_VERTICAL;
+        handleLeft = getSharedPreferences("opts", MODE_PRIVATE).getBoolean("handle_left", true);
+        handleY = getSharedPreferences("opts", MODE_PRIVATE).getFloat("handle_y", -STRIP_UP_FRACTION);
         stripLp.x = dp(EDGE_GAP_DP);
-        stripLp.y = -(int) (getResources().getDisplayMetrics().heightPixels * STRIP_UP_FRACTION);
+        stripLp.y = (int) (getResources().getDisplayMetrics().heightPixels * handleY);
+        applySide();
         applyOptions();
     }
 
@@ -244,15 +263,48 @@ public class OverlayService extends Service {
         return c.getSharedPreferences("opts", Context.MODE_PRIVATE).getBoolean(key, def);
     }
 
+    /** Puts the handle (and its little line) on the left or right edge. */
+    private void applySide() {
+        stripLp.gravity = (handleLeft ? Gravity.LEFT : Gravity.RIGHT) | Gravity.CENTER_VERTICAL;
+        FrameLayout.LayoutParams pl = (FrameLayout.LayoutParams) pill.getLayoutParams();
+        pl.gravity = Gravity.CENTER_VERTICAL | (handleLeft ? Gravity.LEFT : Gravity.RIGHT);
+        pl.leftMargin = handleLeft ? dp(2) : 0;
+        pl.rightMargin = handleLeft ? 0 : dp(2);
+        pill.setLayoutParams(pl);
+    }
+
+    /** Hold the handle for a moment, then drag it: it follows your finger up/down and jumps to whichever edge is closer. */
+    private void moveHandle(float rawX, float rawY) {
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        boolean left = rawX < dm.widthPixels / 2f;
+        int limit = Math.max(0, dm.heightPixels / 2 - stripLp.height / 2);
+        int ny = Math.max(-limit, Math.min(limit, baseY + Math.round(rawY - baseCenter)));
+        if (left != handleLeft) { handleLeft = left; applySide(); }
+        stripLp.y = ny;
+        try { wm.updateViewLayout(strip, stripLp); } catch (Exception ignored) {}
+    }
+
+    private void endMoveHandle() {
+        moving = false;
+        handleY = stripLp.y / (float) getResources().getDisplayMetrics().heightPixels;
+        getSharedPreferences("opts", MODE_PRIVATE).edit().putBoolean("handle_left", handleLeft).putFloat("handle_y", handleY).apply();
+        strip.setBackgroundColor(0x01000000);
+        applyOptions();
+    }
+
     private boolean onStripTouch(MotionEvent e) {
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
-                sx = e.getRawX(); sy = e.getRawY(); forwarding = false;
+                sx = e.getRawX(); sy = e.getRawY(); forwarding = false; moving = false; stripDown = true;
+                h.postDelayed(startMove, 450);                          // hold still = pick the handle up
                 return true;
             case MotionEvent.ACTION_MOVE:
+                if (moving) { moveHandle(e.getRawX(), e.getRawY()); return true; }
                 if (!forwarding) {
-                    float dx = e.getRawX() - sx, dy = Math.abs(e.getRawY() - sy);
-                    if (dx > dp(SWIPE_DP) && dx > dy * 1.2f) {         // a rightward swipe, away from the left edge
+                    float dx = handleLeft ? e.getRawX() - sx : sx - e.getRawX(), dy = Math.abs(e.getRawY() - sy);
+                    if (Math.hypot(e.getRawX() - sx, e.getRawY() - sy) > dp(10)) h.removeCallbacks(startMove);   // you're swiping, not holding
+                    if (dx > dp(SWIPE_DP) && dx > dy * 1.2f) {         // a swipe away from the edge the handle is on
+                        h.removeCallbacks(startMove);
                         forwarding = true;
                         openWheel(false);
                         downTime = SystemClock.uptimeMillis();
@@ -263,11 +315,11 @@ public class OverlayService extends Service {
                 }
                 return true;
             case MotionEvent.ACTION_UP:
-                if (forwarding) forward(MotionEvent.ACTION_UP, e.getRawX(), e.getRawY());
-                forwarding = false;
-                return true;
             case MotionEvent.ACTION_CANCEL:
-                if (forwarding) forward(MotionEvent.ACTION_CANCEL, e.getRawX(), e.getRawY());
+                h.removeCallbacks(startMove);
+                stripDown = false;
+                if (moving) endMoveHandle();
+                else if (forwarding) forward(e.getActionMasked(), e.getRawX(), e.getRawY());
                 forwarding = false;
                 return true;
         }
