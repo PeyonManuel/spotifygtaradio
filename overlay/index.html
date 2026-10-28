@@ -369,6 +369,7 @@ function onAir(st, at=Date.now()){
 
 /* ---------- playback: in this browser (desktop) or on a Spotify device (phone, speaker, ...) ---------- */
 let player=null, sdkId=null, sdkOK=false, sdkStarted=false, inited=false;
+let devSummary="none";   // what Spotify says is out there, shown when the phone can't be found
 let devices=[], devId=null, current=null, lastTune=0, paused=false, lastUri=null, queueEnd=Infinity, misses=0;
 const target=()=>devId==="sdk"?sdkId:devId;
 
@@ -399,6 +400,7 @@ function startPlayer(){
 async function refreshDevices(phone){
   try{ const j=await api("GET","/me/player/devices"); devices=(j&&j.devices)||[]; }
   catch(e){ devices=[]; setStatus("Couldn't list devices: "+e.message); }
+  devSummary=devices.map(d=>d.name+" ("+(d.type||"?")+(d.is_active?", active":"")+(d.is_restricted?", restricted":"")+")").join(", ")||"none";
   const sel=$("dev"); sel.innerHTML="";
   const opts=[];
   if(sdkOK&&sdkId) opts.push({v:"sdk",name:"This browser"});
@@ -411,7 +413,9 @@ async function refreshDevices(phone){
     // phone mode: this phone (Spotify type Smartphone/Tablet) or a device you picked yourself in the list. Never Chrome's web player or another computer:
     // if the phone isn't there, devId stays empty so the radio wakes Spotify and switches to it.
     const isPhone=d=>/smartphone|tablet/i.test(d.type||"")&&!d.is_restricted&&d.id!==sdkId;
-    const ph=devices.find(d=>isPhone(d)&&d.id===want)||devices.find(d=>isPhone(d)&&d.is_active)||devices.find(isPhone);
+    const ph0=devices.find(d=>isPhone(d)&&d.id===want)||devices.find(d=>isPhone(d)&&d.is_active)||devices.find(isPhone);
+    // Fallback: if Spotify doesn't describe the phone as Smartphone/Tablet, accept the active device as long as it isn't a computer (desktop app / web player).
+    const ph=ph0||devices.find(d=>d.is_active&&!d.is_restricted&&d.id!==sdkId&&!/^computer$/i.test(d.type||""));
     pick=(manual&&opts.find(o=>o.v===manual))||(ph&&opts.find(o=>o.v===ph.id))||null;
     if(!pick){ const e=document.createElement("option"); e.value=""; e.textContent="Phone not found: opening Spotify…"; sel.prepend(e); sel.value=""; devId=null; updateVolUI(); return; }
     if(ph&&pick.v===ph.id) LS.set("dev",ph.id);
@@ -574,7 +578,7 @@ async function wakeAndRetune(i,quiet){
         if(k===9&&!target()){ wokeFront=true; wakeSpotify("front"); }          // 5 s and still nothing: show the Spotify app for a moment
       }
     }
-    if(!target()){ stopStatic(true); wokeFront=false; setStatus("Spotify didn't show up. Open it, then tap a station."); return; }
+    if(!target()){ stopStatic(true); wokeFront=false; setStatus("Spotify didn't show up. Open it, then tap a station. Devices Spotify sees: "+devSummary); return; }
     await refreshDevices(true);                                                // pick this phone
     pending={i:wakeWant,quiet:wakeQuiet}; clearTimeout(sendTimer); sendTimer=setTimeout(pump,0);
   } finally { waking=false; }
