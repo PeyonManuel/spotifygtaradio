@@ -606,7 +606,8 @@ async function sendTune(i,quiet){
   const q="?device_id="+encodeURIComponent(dev);
   const seq=++tuneSeq; expectUri=uris[0];
   try{
-    await api("PUT","/me/player/play"+q,{ uris:solo?[uris[0]]:uris, position_ms:pos });
+    if(solo) await playOnPhone(dev,q,st,uris[0],pos);
+    else await api("PUT","/me/player/play"+q,{ uris, position_ms:pos });
     if(i!==current) return;                                // you already moved on; the next request is queued
     lastTune=Date.now(); tuneOK=true;
     if(solo) queueBehind(trk,seq,q);
@@ -619,6 +620,21 @@ async function sendTune(i,quiet){
     if(!quiet&&i===current) stopStatic(true);
     if(e.status===404&&i===current&&!waking&&Date.now()-lastWake>15000){ devId=null; wakeAndRetune(i,quiet); return; }   // "no active device": wake Spotify and retry
     setStatus("Couldn't tune: "+e.message+(e.status===404?" Open Spotify on that device, then try again.":"")); }
+}
+// The phone's Spotify app: first make it the active device (commands to a phone that isn't active fail with "no active device"),
+// then start the station's playlist at the on-air song (a playlist start is what the Spotify app handles most reliably).
+async function playOnPhone(dev,q,st,uri,pos){
+  const transfer=()=>api("PUT","/me/player",{ device_ids:[dev], play:false }).catch(()=>{});
+  const d=devices.find(x=>x.id===dev);
+  if(!d||!d.is_active){ await transfer(); await sleep(800); }
+  const ctx={ context_uri:"spotify:playlist:"+st.id, offset:{uri}, position_ms:pos };
+  const single=()=>api("PUT","/me/player/play"+q,{ uris:[uri], position_ms:pos });   // e.g. the song isn't in the playlist any more
+  try{ await api("PUT","/me/player/play"+q,ctx); }
+  catch(e){
+    if(e.status!==404){ await single(); return; }
+    await transfer(); await sleep(1200);                    // still "no active device": hand playback to the phone and try once more
+    try{ await api("PUT","/me/player/play"+q,ctx); } catch(e2){ if(e2.status===404) throw e2; await single(); }
+  }
 }
 // queue the songs after the first one, one request each (stops quietly if you tune somewhere else meanwhile)
 async function queueBehind(trk,seq,q){
