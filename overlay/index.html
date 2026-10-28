@@ -207,7 +207,7 @@ addEventListener("error",e=>showErr("Error: "+e.message));
 addEventListener("unhandledrejection",e=>showErr("Error: "+((e.reason&&e.reason.message)||e.reason)));
 
 /* ---------- debug log: Spotify requests + answers and the radio's decisions, shared by the app window and the overlay window ---------- */
-const BUILD="2026-10-28 log1";
+const BUILD="2026-10-28 own-player";
 function dlog(m){
   try{
     const l=LS.get("dbglog",[]), t=new Date();
@@ -433,15 +433,21 @@ let devSummary="none";   // what Spotify says is out there, shown when the phone
 let devices=[], devId=null, current=null, lastTune=0, paused=false, lastUri=null, queueEnd=Infinity, misses=0;
 const target=()=>devId==="sdk"?sdkId:devId;
 
+const APP = NATIVE || !!window.GtaOverlayHost;   // inside the Android app (app window or wheel window)
+function ovRunning(){ try{ return !!JSON.parse(GtaNative.overlayStatus()).running; }catch{ return false; } }
 function startPlayer(){
   if(sdkStarted) return; sdkStarted=true;
-  if(MOBILE){ setStatus("Phone: audio plays through your Spotify app. Open Spotify once, pick this phone in the list, then tap a station."); return; }
+  // The radio's own player (Spotify's web player). In the app it lives in the wheel window, which stays alive in the background
+  // while the overlay is on; the app window runs it only when the overlay is off. In a phone browser: the Spotify app plays.
+  const host = APP ? (OVERLAY || !ovRunning()) : !MOBILE;
+  dlog("own player: "+(host?"starting here":"not in this window")+(APP?(OVERLAY?" (wheel window)":" (app window, overlay "+(ovRunning()?"on":"off")+")"):""));
+  if(!host){ if(!APP) setStatus("Phone: audio plays through your Spotify app. Open Spotify once, pick this phone in the list, then tap a station."); return; }
   const init=()=>{
     if(inited) return; inited=true;
     try{ player=new Spotify.Player({ name:"GTA Spotify Radio", getOAuthToken:cb=>getToken().then(cb), volume:LS.get("vol",.8) }); }
-    catch(e){ setStatus("This browser can't play audio itself. Pick a Spotify device below."); return; }
-    player.addListener("ready",({device_id})=>{ sdkId=device_id; sdkOK=true; refreshDevices(); setStatus("Ready. Tap a station."); });
-    player.addListener("not_ready",()=>{ sdkOK=false; });
+    catch(e){ dlog("own player failed to start: "+e.message); setStatus("This browser can't play audio itself. Pick a Spotify device below."); return; }
+    player.addListener("ready",({device_id})=>{ sdkId=device_id; sdkOK=true; if(APP) LS.set("sdkdev",{id:device_id,t:Date.now()}); dlog("own player ready: "+device_id); refreshDevices(APP); setStatus("Ready. Tap a station."); });
+    player.addListener("not_ready",({device_id})=>{ sdkOK=false; dlog("own player went offline: "+device_id); });
     player.addListener("player_state_changed",s=>{
       if(!noise||!s||s.paused) return;
       const c=s.track_window&&s.track_window.current_track;
@@ -464,7 +470,7 @@ async function refreshDevices(phone){
   dlogOnce("devices","devices: "+devSummary);
   const sel=$("dev"); sel.innerHTML="";
   const opts=[];
-  if(sdkOK&&sdkId) opts.push({v:"sdk",name:"This browser"});
+  if(sdkOK&&sdkId) opts.push({v:"sdk",name:APP?"This phone (radio app)":"This browser"});
   devices.filter(d=>d.id!==sdkId&&!d.is_restricted).forEach(d=>opts.push({v:d.id,name:d.name+(d.is_active?" (active)":"")}));
   if(!opts.length){ sel.innerHTML='<option value="">No device found: open Spotify on your phone</option>'; devId=null; updateVolUI(); dlogOnce("pick","picked: none (Spotify lists no devices)"); return; }
   opts.forEach(o=>{ const e=document.createElement("option"); e.value=o.v; e.textContent=o.name; sel.append(e); });
@@ -477,7 +483,11 @@ async function refreshDevices(phone){
     const ph0=devices.find(d=>isPhone(d)&&d.id===want)||devices.find(d=>isPhone(d)&&d.is_active)||devices.find(isPhone);
     // Fallback: if Spotify doesn't describe the phone as Smartphone/Tablet, accept the active device as long as it isn't a computer (desktop app / web player).
     const ph=ph0||devices.find(d=>d.is_active&&!d.is_restricted&&d.id!==sdkId&&!/^computer$/i.test(d.type||""));
-    pick=(manual&&opts.find(o=>o.v===manual))||(ph&&opts.find(o=>o.v===ph.id))||null;
+    // the radio app's own player (in this window, or the one the wheel window runs) beats remote-controlling the Spotify app
+    const shared=LS.get("sdkdev",null), appDev=shared&&devices.find(d=>d.id===shared.id);
+    const appPick=(sdkOK&&sdkId&&opts.find(o=>o.v==="sdk"))||(appDev&&opts.find(o=>o.v===appDev.id))||null;
+    const manualOpt=manual&&opts.find(o=>o.v===manual), manualIsPhone=!!manual&&devices.some(d=>d.id===manual&&isPhone(d));
+    pick=(manualOpt&&!(manualIsPhone&&appPick)?manualOpt:null)||appPick||(ph&&opts.find(o=>o.v===ph.id))||null;
     if(!pick){ const e=document.createElement("option"); e.value=""; e.textContent="Phone not found: opening Spotify…"; sel.prepend(e); sel.value=""; devId=null; updateVolUI(); dlogOnce("pick","picked: none (no phone in the list)"); return; }
     if(ph&&pick.v===ph.id) LS.set("dev",ph.id);
   } else {
@@ -660,7 +670,7 @@ async function pump(){
 }
 async function sendTune(i,quiet){
   const dev=target(); if(!dev) return;
-  const solo=devId!=="sdk";                                // the phone's Spotify app doesn't reliably start uris[0] from a long list: play ONE song first, then queue the rest behind it
+  const dv=devices.find(d=>d.id===dev), solo=devId!=="sdk"&&!!dv&&/smartphone|tablet/i.test(dv.type||"");                                // the phone's Spotify app doesn't reliably start uris[0] from a long list: play ONE song first, then queue the rest behind it
   const st=stations[i], oa=onAir(st);                      // timing is computed NOW, at send time
   const trk=[]; let span=-oa.offset;
   for(let k=0;k<(solo?20:60);k++){ const t=st.tracks[(oa.idx+k)%st.tracks.length]; trk.push(t); span+=t.dur; }
@@ -932,7 +942,7 @@ let ovTimer=null;
 async function bootOverlay(){
   const cached=LS.get("tok")&&loadCache();
   if(!cached) return;                                   // log in / build the radio in the app first
-  stations=orderAndGroup(cached); show("radio"); buildWheel(); refreshDevices(true); adoptCur();
+  stations=orderAndGroup(cached); show("radio"); buildWheel(); startPlayer(); refreshDevices(true); adoptCur();
   if(current===null){ const c=LS.get("curst",null); if(c&&stations[c.i]){ current=c.i; markOn(); hubStation(current); } }
   const arm=ms=>{ clearTimeout(ovTimer); ovTimer=setTimeout(()=>{ try{ GtaOverlayHost.close(); }catch{} },typeof ms==="number"?ms:1500); };   // closes 1.5 s after your last touch
   addEventListener("pointerdown",()=>clearTimeout(ovTimer),true);

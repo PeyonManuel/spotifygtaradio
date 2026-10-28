@@ -29,6 +29,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.PermissionRequest;
+import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -186,6 +188,21 @@ public class OverlayService extends Service {
         else startForeground(1, n);
     }
 
+    /** Spotify's web player needs "protected media" (DRM, like in Chrome); WebView only allows it when the app grants it. */
+    static WebChromeClient drmClient() {
+        return new WebChromeClient() {
+            @Override public void onPermissionRequest(PermissionRequest request) {
+                for (String r : request.getResources()) {
+                    if (PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID.equals(r)) {
+                        request.grant(new String[]{PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID});
+                        return;
+                    }
+                }
+                request.deny();
+            }
+        };
+    }
+
     private void buildWheel() {
         web = new WebView(this);
         WebSettings s = web.getSettings();
@@ -199,6 +216,7 @@ public class OverlayService extends Service {
         web.setVerticalScrollBarEnabled(false);
         web.setHorizontalScrollBarEnabled(false);
         web.addJavascriptInterface(new Host(), "GtaOverlayHost");
+        web.setWebChromeClient(drmClient());                // lets Spotify's web player play here (protected audio)
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                 return !PAGE_HOST.equals(r.getUrl().getHost());

@@ -48,6 +48,7 @@ public class MainActivity extends Activity {
         else if (Build.VERSION.SDK_INT >= 29) s.setForceDark(WebSettings.FORCE_DARK_OFF);
         web.setBackgroundColor(Color.parseColor("#0d0d12"));
         web.addJavascriptInterface(new Native(), "GtaNative");
+        web.setWebChromeClient(OverlayService.drmClient());   // lets Spotify's web player play here (protected audio)
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
