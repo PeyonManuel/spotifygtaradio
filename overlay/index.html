@@ -96,6 +96,13 @@
   html.ov.open .screen.full.on { opacity:1; }
   html.ov #stage { filter:drop-shadow(0 0 30px #000); }
   #foot.away { opacity:0; transform:translateY(100%); pointer-events:none; }
+  #logp { position:fixed; inset:0; z-index:50; background:#0d0d12f2; display:flex; flex-direction:column; gap:8px; padding:calc(10px + env(safe-area-inset-top)) 10px calc(10px + env(safe-area-inset-bottom)); }
+  #logp[hidden] { display:none; }
+  #logp .lbar { display:flex; gap:8px; align-items:center; }
+  #logp .lbar b { flex:1; color:var(--accent); letter-spacing:.08em; }
+  #logp button.mini { margin:0; padding:8px 12px; font-size:13px; background:#262632; color:var(--fg); border:0; border-radius:8px; }
+  #logt { flex:1; width:100%; box-sizing:border-box; background:#000; color:#d6f5e3; font:11px/1.4 ui-monospace,Menlo,Consolas,monospace; border:1px solid #333; border-radius:8px; padding:8px; white-space:pre; overflow:auto; resize:none; }
+  html.ov #logp { display:none !important; }
   #st { flex-basis:100%; text-align:center; min-height:1.2em; }
   @container (max-width:560px) { @media (max-aspect-ratio:4/5) { #hlogo { width:26cqw; height:26cqw; } } }
 </style>
@@ -103,6 +110,10 @@
 <body>
 
 <div id="err" title="Tap to dismiss"></div>
+<div id="logp" hidden>
+  <div class="lbar"><b>LOG</b><button class="mini" id="logCopy">Copy</button><button class="mini" id="logClear">Clear</button><button class="mini" id="logClose">Close</button></div>
+  <textarea id="logt" readonly spellcheck="false"></textarea>
+</div>
 
 <!-- LOADING -->
 <div class="screen on" id="s-load">
@@ -158,6 +169,7 @@
     <button class="mini" id="ovHandle" hidden>Handle</button>
     <button class="mini" id="ovHint" hidden>Hint</button>
     <button class="mini" id="ovBack" hidden>Return</button>
+    <button class="mini" id="logBtn">Log</button>
     <button class="mini" id="out">Sign out</button>
     <span id="st"></span>
   </div>
@@ -188,11 +200,33 @@ const LS = {
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 const fmt = ms => { const s=Math.max(0,Math.floor(ms/1000)); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); };
 function show(id){ document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on")); $(id).classList.add("on"); }
-function showErr(m){ const e=$("err"); e.textContent=String(m); e.style.display="block"; console.error(m); }
-function setStatus(m){ $("st").textContent=m||""; }
+function showErr(m){ const e=$("err"); e.textContent=String(m); e.style.display="block"; console.error(m); dlog("ERROR "+m); }
+function setStatus(m){ $("st").textContent=m||""; if(m) dlogOnce("status","status: "+m); }
 $("err").onclick=()=>{ $("err").style.display="none"; };
 addEventListener("error",e=>showErr("Error: "+e.message));
 addEventListener("unhandledrejection",e=>showErr("Error: "+((e.reason&&e.reason.message)||e.reason)));
+
+/* ---------- debug log: Spotify requests + answers and the radio's decisions, shared by the app window and the overlay window ---------- */
+const BUILD="2026-10-28 log1";
+function dlog(m){
+  try{
+    const l=LS.get("dbglog",[]), t=new Date();
+    l.push(t.toTimeString().slice(0,8)+"."+String(t.getMilliseconds()).padStart(3,"0")+(OVERLAY?" [wheel] ":" ")+m);
+    while(l.length>400) l.shift();
+    LS.set("dbglog",l);
+    if(!$("logp").hidden){ $("logt").value=l.join("\n"); $("logt").scrollTop=1e9; }
+  }catch{}
+}
+const dlogLast={};
+function dlogOnce(key,m){ if(dlogLast[key]!==m){ dlogLast[key]=m; dlog(m); } }   // only when it changed (keeps polling quiet)
+$("logBtn").onclick=()=>{ $("logt").value=LS.get("dbglog",[]).join("\n")||"(empty)"; $("logp").hidden=false; $("logt").scrollTop=1e9; };
+$("logClose").onclick=()=>{ $("logp").hidden=true; };
+$("logClear").onclick=()=>{ LS.del("dbglog"); for(const k in dlogLast) delete dlogLast[k]; $("logt").value=""; };
+$("logCopy").onclick=async()=>{
+  const t=$("logt"); t.focus(); t.select(); let ok=false;
+  try{ await navigator.clipboard.writeText(t.value); ok=true; }catch{ try{ ok=document.execCommand("copy"); }catch{} }
+  $("logCopy").textContent=ok?"Copied":"Select all + copy"; setTimeout(()=>{ $("logCopy").textContent="Copy"; },1800);
+};
 
 /* ---------- auth (PKCE, no secret needed) ---------- */
 const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
@@ -220,15 +254,41 @@ async function getToken(){
   if(Date.now() > t.exp) await tokenRequest({ grant_type:"refresh_token", refresh_token:t.refresh });
   return LS.get("tok").access;
 }
+const shortPath=p=>p.replace(/^https:\/\/api\.spotify\.com\/v1/,"").replace(/fields=[^&]*/,"fields=…");
+function bodySum(b){
+  if(!b) return "";
+  const o={}; for(const k in b){ const v=b[k]; o[k]=Array.isArray(v)&&v.length>2?`[${v.length} items, first ${v[0]}]`:v; }
+  return " "+JSON.stringify(o);
+}
+function playerSum(d){
+  if(!d) return "nothing playing";
+  const dv=d.device?d.device.name+(d.device.is_active?"":" (inactive)"):"no device";
+  return dv+", "+(d.is_playing?"PLAYING":"paused")+", "+(d.item?`"${d.item.name}" ${d.item.uri}`:"no song")+" @"+Math.round((d.progress_ms||0)/1000)+"s"+(d.context?", from "+d.context.uri:"");
+}
 async function api(method, path, body){
+  const sp=shortPath(path);
+  const poll=method==="GET"&&/^\/me\/player(\?|$)/.test(sp);                       // logged only when the answer changes
+  const bulk=(method==="GET"&&/^\/(me\/)?playlists/.test(sp))||/^\/me\/player\/queue/.test(sp);   // logged only on errors
+  if(!poll&&!bulk&&sp!=="/me/player/devices") dlog("→ "+method+" "+sp+bodySum(body));
   for(let attempt=0; attempt<3; attempt++){
     const r = await fetch(path.startsWith("http")?path:"https://api.spotify.com/v1"+path, { method,
       headers:{ Authorization:"Bearer "+await getToken(), ...(body?{"Content-Type":"application/json"}:{}) },
       body: body?JSON.stringify(body):undefined });
-    if(r.status===429){ await sleep((+r.headers.get("Retry-After")||1)*1000+200); continue; }
-    if(r.status===204) return null;
-    const txt = await r.text(); const j = txt?JSON.parse(txt):null;
-    if(!r.ok){ const e=new Error((j&&j.error&&j.error.message)||r.statusText); e.status=r.status; throw e; }
+    if(r.status===429){
+      const ra=+r.headers.get("Retry-After")||1; let why=""; try{ const j=JSON.parse(await r.text()); why=(j&&(j.reason||(j.error&&j.error.reason)))||""; }catch{}
+      dlog(`← 429 ${method} ${sp}: wait ${ra}s ${why}`);
+      if(ra>30){ const e=new Error(`Spotify says wait ${Math.ceil(ra/60)} min${why?" ("+why+")":""}`); e.status=429; throw e; }   // don't hang silently for minutes
+      await sleep(ra*1000+200); continue;
+    }
+    if(r.status===204){ if(poll) dlogOnce("player","player: nothing playing"); else if(!bulk&&sp!=="/me/player/devices") dlog("← 204 "+method+" "+sp); return null; }
+    const txt = await r.text(); let j=null; try{ j = txt?JSON.parse(txt):null; }catch{}
+    if(!r.ok){
+      const msg=(j&&j.error&&j.error.message)||r.statusText, why=(j&&j.error&&j.error.reason)||"";
+      dlog(`← ${r.status} ${method} ${sp}: ${msg}${why?" ("+why+")":""}`);
+      const e=new Error(msg); e.status=r.status; e.reason=why; throw e;
+    }
+    if(poll) dlogOnce("player","player: "+playerSum(j));
+    else if(!bulk&&sp!=="/me/player/devices") dlog("← "+r.status+" "+method+" "+sp);
     return j;
   }
   throw new Error("rate limited");
@@ -401,11 +461,12 @@ async function refreshDevices(phone){
   try{ const j=await api("GET","/me/player/devices"); devices=(j&&j.devices)||[]; }
   catch(e){ devices=[]; setStatus("Couldn't list devices: "+e.message); }
   devSummary=devices.map(d=>d.name+" ("+(d.type||"?")+(d.is_active?", active":"")+(d.is_restricted?", restricted":"")+")").join(", ")||"none";
+  dlogOnce("devices","devices: "+devSummary);
   const sel=$("dev"); sel.innerHTML="";
   const opts=[];
   if(sdkOK&&sdkId) opts.push({v:"sdk",name:"This browser"});
   devices.filter(d=>d.id!==sdkId&&!d.is_restricted).forEach(d=>opts.push({v:d.id,name:d.name+(d.is_active?" (active)":"")}));
-  if(!opts.length){ sel.innerHTML='<option value="">No device found: open Spotify on your phone</option>'; devId=null; updateVolUI(); return; }
+  if(!opts.length){ sel.innerHTML='<option value="">No device found: open Spotify on your phone</option>'; devId=null; updateVolUI(); dlogOnce("pick","picked: none (Spotify lists no devices)"); return; }
   opts.forEach(o=>{ const e=document.createElement("option"); e.value=o.v; e.textContent=o.name; sel.append(e); });
   const want=LS.get("dev",null), manual=LS.get("devManual",null), act=devices.find(d=>d.is_active&&d.id!==sdkId);
   let pick;
@@ -417,12 +478,13 @@ async function refreshDevices(phone){
     // Fallback: if Spotify doesn't describe the phone as Smartphone/Tablet, accept the active device as long as it isn't a computer (desktop app / web player).
     const ph=ph0||devices.find(d=>d.is_active&&!d.is_restricted&&d.id!==sdkId&&!/^computer$/i.test(d.type||""));
     pick=(manual&&opts.find(o=>o.v===manual))||(ph&&opts.find(o=>o.v===ph.id))||null;
-    if(!pick){ const e=document.createElement("option"); e.value=""; e.textContent="Phone not found: opening Spotify…"; sel.prepend(e); sel.value=""; devId=null; updateVolUI(); return; }
+    if(!pick){ const e=document.createElement("option"); e.value=""; e.textContent="Phone not found: opening Spotify…"; sel.prepend(e); sel.value=""; devId=null; updateVolUI(); dlogOnce("pick","picked: none (no phone in the list)"); return; }
     if(ph&&pick.v===ph.id) LS.set("dev",ph.id);
   } else {
     pick=opts.find(o=>o.v===want)||opts.find(o=>o.v==="sdk")||(act&&opts.find(o=>o.v===act.id))||opts[0];
   }
   sel.value=pick.v; devId=pick.v; updateVolUI();
+  dlogOnce("pick","picked: "+((devices.find(d=>d.id===pick.v)||{}).name||pick.v)+(phone&&manual&&pick.v===manual?" (chosen by you in the list)":""));
 }
 $("dev").onchange=()=>{ devId=$("dev").value||null; LS.set("dev",devId); LS.set("devManual",devId); updateVolUI(); if(current!==null&&devId) tune(current,{force:true}); };
 $("devRef").onclick=()=>refreshDevices();
@@ -537,9 +599,10 @@ function stopStatic(now){
 async function waitForStart(uri,seq){
   const t0=Date.now();
   while(noise&&seq===tuneSeq&&Date.now()-t0<12000){
-    try{ const d=await api("GET","/me/player"); if(d&&d.is_playing&&d.item&&(d.item.uri===uri||(d.item.linked_from&&d.item.linked_from.uri===uri)||(d.progress_ms>1500&&Date.now()-t0>2500))){ stopStatic(); returnPrev(); return; } }catch{}
+    try{ const d=await api("GET","/me/player"); if(d&&d.is_playing&&d.item&&(d.item.uri===uri||(d.item.linked_from&&d.item.linked_from.uri===uri)||(d.progress_ms>1500&&Date.now()-t0>2500))){ dlog("started: "+playerSum(d)); stopStatic(); returnPrev(); return; } }catch{}
     await sleep(400);
   }
+  if(seq===tuneSeq) dlog("the song didn't start within 12 s");
 }
 
 /* Tuning is split in two so mashing the wheel can't break anything:
@@ -555,6 +618,7 @@ function tune(i,opts){
   if(devId==="sdk"&&player){ try{ player.activateElement(); }catch{} }
   current=i; lastTune=Date.now(); misses=0; if(muted) setTimeout(applyVolume,600); publishCur();
   if(!quiet){ expectUri=null; const sd=switchSound(); startStatic(sd,dev?7000:30000); markOn(); showStation(); lastUri=null; }   // no device yet: keep "tuning" for longer while Spotify wakes up
+  dlog("tune "+(stations[i]?stInfo(stations[i]).name:i)+(quiet?" (re-sync)":"")+" on "+(dev?((devices.find(d=>d.id===dev)||{}).name||dev):"no device"));
   if(!dev){ wakeAndRetune(i,quiet); return; }
   pending={i,quiet:quiet&&(!pending||pending.quiet)};     // a real tune always wins over a quiet re-sync
   clearTimeout(sendTimer); sendTimer=setTimeout(pump,quiet?0:TUNE_DEBOUNCE);
@@ -575,7 +639,7 @@ async function wakeAndRetune(i,quiet){
       setStatus("Opening Spotify…"); wakeSpotify("quiet");                    // no screen change
       for(let k=0;k<40&&!target();k++){
         await sleep(500); await refreshDevices(true);
-        if(k===9&&!target()){ wokeFront=true; wakeSpotify("front"); }          // 5 s and still nothing: show the Spotify app for a moment
+        if(k===9&&!target()){ wokeFront=true; dlog("still no device after 5 s: showing Spotify on screen"); wakeSpotify("front"); }          // 5 s and still nothing: show the Spotify app for a moment
       }
     }
     if(!target()){ stopStatic(true); wokeFront=false; setStatus("Spotify didn't show up. Open it, then tap a station. Devices Spotify sees: "+devSummary); return; }
@@ -626,13 +690,13 @@ async function sendTune(i,quiet){
 async function playOnPhone(dev,q,st,uri,pos){
   const transfer=()=>api("PUT","/me/player",{ device_ids:[dev], play:false }).catch(()=>{});
   const d=devices.find(x=>x.id===dev);
-  if(!d||!d.is_active){ await transfer(); await sleep(800); }
+  if(!d||!d.is_active){ dlog("the phone isn't the active device: handing playback to it"); await transfer(); await sleep(800); }
   const ctx={ context_uri:"spotify:playlist:"+st.id, offset:{uri}, position_ms:pos };
   const single=()=>api("PUT","/me/player/play"+q,{ uris:[uri], position_ms:pos });   // e.g. the song isn't in the playlist any more
   try{ await api("PUT","/me/player/play"+q,ctx); }
   catch(e){
-    if(e.status!==404){ await single(); return; }
-    await transfer(); await sleep(1200);                    // still "no active device": hand playback to the phone and try once more
+    if(e.status!==404){ dlog("playlist start refused: playing the song on its own"); await single(); return; }
+    dlog("still \"no active device\": handing playback to the phone again"); await transfer(); await sleep(1200);                    // still "no active device": hand playback to the phone and try once more
     try{ await api("PUT","/me/player/play"+q,ctx); } catch(e2){ if(e2.status===404) throw e2; await single(); }
   }
 }
@@ -640,11 +704,12 @@ async function playOnPhone(dev,q,st,uri,pos){
 async function queueBehind(trk,seq,q){
   for(let k=1;k<trk.length;k++){
     if(seq!==tuneSeq) return;
-    try{ await api("POST","/me/player/queue"+q+"&uri="+encodeURIComponent(trk[k].uri)); }catch(e){ return; }
+    try{ await api("POST","/me/player/queue"+q+"&uri="+encodeURIComponent(trk[k].uri)); }catch(e){ dlog("queueing stopped after "+(k-1)+" songs: "+e.message); return; }
     if(seq!==tuneSeq) return;
     queueEnd+=trk[k].dur;
     await sleep(200);
   }
+  dlog("queued the next "+(trk.length-1)+" songs");
 }
 /* the app page and the overlay page are two windows of the same app: they tell each other which station is tuned (screen only, no extra Spotify call) */
 let curSeen=0;
@@ -725,9 +790,10 @@ setInterval(()=>{
 },500);
 // Keeps the radio honest, silently. It only steps in if Spotify is clearly NOT on this station's current
 // song (or one next to it) two checks in a row, or when the queued songs are about to run out.
+let lastGuardTune=0;   // the guard re-syncs at most every 2 min: each re-sync restarts Spotify's queue
 async function guardCheck(){
   if(OVERLAY||current===null||paused||Date.now()-lastTune<9000) return;
-  if(Date.now()>queueEnd-20000){ tune(current,{quiet:true}); return; }          // refill the queue before it empties
+  if(Date.now()>queueEnd-20000){ if(Date.now()-lastGuardTune<120000) return; lastGuardTune=Date.now(); dlog("queued songs running out: re-sync"); tune(current,{quiet:true}); return; }          // refill the queue before it empties
   const st=stations[current], oa=onAir(st), n=st.tracks.length;
   const near=new Set([-1,0,1].map(d=>st.tracks[(oa.idx+d+n)%n].uri));           // previous / current / next: drift is fine
   try{
@@ -740,7 +806,7 @@ async function guardCheck(){
       now=[d.item.uri,d.item.linked_from&&d.item.linked_from.uri];
     }
     misses=(now&&now.some(u=>u&&near.has(u)))?0:misses+1;                        // "linked_from" = Spotify swapped in another version
-    if(misses>=2){ misses=0; tune(current,{quiet:true}); }
+    if(misses>=2){ misses=0; if(Date.now()-lastGuardTune<120000){ dlog("Spotify is off the station's song, but it re-synced under 2 min ago: leaving it"); return; } lastGuardTune=Date.now(); dlog("Spotify is off the station's song: re-sync"); tune(current,{quiet:true}); }
   }catch{}
 }
 setInterval(guardCheck,10000);
@@ -877,6 +943,7 @@ async function bootOverlay(){
   document.title="overlay-ready";
 }
 (async function boot(){
+  dlog("page loaded, build "+BUILD+", "+(NATIVE?"in the app":"in a browser")+(MOBILE?", phone":", computer"));
   if(!OVERLAY) $("redir").textContent=REDIRECT; $("cid").value=LS.get("cid","");
   $("login").onclick=login;
   LS.del("sel"); LS.del("cache");                    // leftovers from earlier versions
