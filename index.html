@@ -652,7 +652,8 @@ async function guardCheck(){
     if(misses>=2){ misses=0; tune(current,{quiet:true}); }
   }catch{}
 }
-setInterval(guardCheck,10000);
+// Auto re-sync removed: the radio only sends Spotify commands when you tap a station.
+// (guardCheck stays defined but is never scheduled.)
 function setupMediaSession(){
   if(!("mediaSession" in navigator)) return;
   try{ navigator.mediaSession.setActionHandler("previoustrack",()=>step(-1)); navigator.mediaSession.setActionHandler("nexttrack",()=>step(1)); }catch{}
