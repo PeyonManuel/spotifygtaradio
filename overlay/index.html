@@ -207,7 +207,7 @@ addEventListener("error",e=>showErr("Error: "+e.message));
 addEventListener("unhandledrejection",e=>showErr("Error: "+((e.reason&&e.reason.message)||e.reason)));
 
 /* ---------- debug log: Spotify requests + answers and the radio's decisions, shared by the app window and the overlay window ---------- */
-const BUILD="2026-10-28 own-player";
+const BUILD="2026-10-28 no-auto-sync";
 function dlog(m){
   try{
     const l=LS.get("dbglog",[]), t=new Date();
