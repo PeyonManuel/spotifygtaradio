@@ -596,17 +596,20 @@ async function pump(){
 }
 async function sendTune(i,quiet){
   const dev=target(); if(!dev) return;
+  const solo=devId!=="sdk";                                // the phone's Spotify app doesn't reliably start uris[0] from a long list: play ONE song first, then queue the rest behind it
   const st=stations[i], oa=onAir(st);                      // timing is computed NOW, at send time
-  const uris=[]; let span=-oa.offset;
-  for(let k=0;k<60;k++){ const t=st.tracks[(oa.idx+k)%st.tracks.length]; uris.push(t.uri); span+=t.dur; }
-  queueEnd=Date.now()+span;               // when the 60 queued songs run out
+  const trk=[]; let span=-oa.offset;
+  for(let k=0;k<(solo?20:60);k++){ const t=st.tracks[(oa.idx+k)%st.tracks.length]; trk.push(t); span+=t.dur; }
+  const uris=trk.map(t=>t.uri);
+  queueEnd=Date.now()+(solo?oa.track.dur-oa.offset:span);   // when the queued songs run out (solo: grows as the rest gets queued)
   const pos=Math.max(0,Math.min(Math.floor(oa.offset+LAG), oa.track.dur-1500));
   const q="?device_id="+encodeURIComponent(dev);
   const seq=++tuneSeq; expectUri=uris[0];
   try{
-    await api("PUT","/me/player/play"+q,{ uris, position_ms:pos });
+    await api("PUT","/me/player/play"+q,{ uris:solo?[uris[0]]:uris, position_ms:pos });
     if(i!==current) return;                                // you already moved on; the next request is queued
     lastTune=Date.now(); tuneOK=true;
+    if(solo) queueBehind(trk,seq,q);
     if(devId!=="sdk"&&!quiet) waitForStart(uris[0],seq);
     if(modeSet!==dev){ modeSet=dev;                        // shuffle/repeat off: once per device is enough
       api("PUT","/me/player/shuffle"+q+"&state=false").catch(()=>{ if(modeSet===dev) modeSet=null; });
@@ -616,6 +619,16 @@ async function sendTune(i,quiet){
     if(!quiet&&i===current) stopStatic(true);
     if(e.status===404&&i===current&&!waking&&Date.now()-lastWake>15000){ devId=null; wakeAndRetune(i,quiet); return; }   // "no active device": wake Spotify and retry
     setStatus("Couldn't tune: "+e.message+(e.status===404?" Open Spotify on that device, then try again.":"")); }
+}
+// queue the songs after the first one, one request each (stops quietly if you tune somewhere else meanwhile)
+async function queueBehind(trk,seq,q){
+  for(let k=1;k<trk.length;k++){
+    if(seq!==tuneSeq) return;
+    try{ await api("POST","/me/player/queue"+q+"&uri="+encodeURIComponent(trk[k].uri)); }catch(e){ return; }
+    if(seq!==tuneSeq) return;
+    queueEnd+=trk[k].dur;
+    await sleep(200);
+  }
 }
 /* the app page and the overlay page are two windows of the same app: they tell each other which station is tuned (screen only, no extra Spotify call) */
 let curSeen=0;
