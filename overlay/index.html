@@ -485,7 +485,8 @@ async function refreshDevices(phone){
     const ph=ph0||devices.find(d=>d.is_active&&!d.is_restricted&&d.id!==sdkId&&!/^computer$/i.test(d.type||""));
     // the radio app's own player (in this window, or the one the wheel window runs) beats remote-controlling the Spotify app
     const shared=LS.get("sdkdev",null), appDev=shared&&devices.find(d=>d.id===shared.id);
-    const appPick=(sdkOK&&sdkId&&opts.find(o=>o.v==="sdk"))||(appDev&&opts.find(o=>o.v===appDev.id))||null;
+    const chromeDev=devices.find(d=>d.id!==sdkId&&!d.is_restricted&&/GTA Spotify Radio/i.test(d.name||""));   // the radio page open in Chrome (its own player)
+    const appPick=(sdkOK&&sdkId&&opts.find(o=>o.v==="sdk"))||(appDev&&opts.find(o=>o.v===appDev.id))||(chromeDev&&opts.find(o=>o.v===chromeDev.id))||null;
     const manualOpt=manual&&opts.find(o=>o.v===manual), manualIsPhone=!!manual&&devices.some(d=>d.id===manual&&isPhone(d));
     pick=(manualOpt&&!(manualIsPhone&&appPick)?manualOpt:null)||appPick||(ph&&opts.find(o=>o.v===ph.id))||null;
     if(!pick){ const e=document.createElement("option"); e.value=""; e.textContent="Phone not found: opening Spotify…"; sel.prepend(e); sel.value=""; devId=null; updateVolUI(); dlogOnce("pick","picked: none (no phone in the list)"); return; }
