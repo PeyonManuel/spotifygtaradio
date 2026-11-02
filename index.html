@@ -178,6 +178,7 @@ const LS = {
   del:k=>{ try{ localStorage.removeItem(k); }catch{} }
 };
 const dlog=m=>console.log("[radio]",m);
+const BUILD="2026-11-02 self-update";   // change on every update: open windows reload themselves when it differs
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 const fmt = ms => { const s=Math.max(0,Math.floor(ms/1000)); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); };
 function show(id){ document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on")); $(id).classList.add("on"); }
@@ -620,6 +621,24 @@ async function sendTune(i,quiet){
     setStatus(mirrorNote);
   }catch(e){ if(!quiet&&i===current) stopStatic(true); setStatus("Couldn't tune: "+e.message+(e.status===404?" Open Spotify on that device, then try again.":"")); }
 }
+/* A window of the radio can stay open for days (the app's wheel window lives inside its background service and loads the page once).
+   When the radio page has been updated, reload it, so an old version never keeps sending old commands. Checks the page itself
+   (GitHub Pages, never Spotify), at most every 5 min; never while this window's own player is playing. */
+let verChecked=0;
+async function updateIfNew(){
+  if(Date.now()-verChecked<5*60e3) return; verChecked=Date.now();
+  try{
+    if(typeof player!=="undefined"&&player&&sdkOK){ const s=await player.getCurrentState(); if(s&&!s.paused) return; }
+    const r=await fetch(location.pathname+"?v="+Date.now(),{cache:"no-store"}); if(!r.ok) return;
+    const m=/const BUILD="([^"]+)"/.exec(await r.text());
+    if(m&&m[1]!==BUILD){
+      dlog("radio page updated ("+BUILD+" → "+m[1]+"): reloading");
+      const ov=new URLSearchParams(location.search).get("overlay")==="1";
+      setTimeout(()=>location.replace(location.pathname+"?"+(ov?"overlay=1&":"")+"v="+Date.now()+location.hash),200);
+    }
+  }catch{}
+}
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden) updateIfNew(); });
 function step(d){ const n=stations.length; tune((((current===null?(d>0?-1:0):current)+d)%n+n)%n); }
 /* mute (the radio keeps running on the live clock; you just can't hear it) */
 let muted=false;

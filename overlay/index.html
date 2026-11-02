@@ -207,7 +207,7 @@ addEventListener("error",e=>showErr("Error: "+e.message));
 addEventListener("unhandledrejection",e=>showErr("Error: "+((e.reason&&e.reason.message)||e.reason)));
 
 /* ---------- debug log: Spotify requests + answers and the radio's decisions, shared by the app window and the overlay window ---------- */
-const BUILD="2026-11-02 station-playlists";
+const BUILD="2026-11-02 self-update";
 function dlog(m){
   try{
     const l=LS.get("dbglog",[]), t=new Date();
@@ -782,6 +782,24 @@ function adoptCur(){
   current=c.i; lastTune=Date.now(); misses=0; lastUri=null; tuneOK=true; markOn(); hubStation(hot>=0?hot:current);
 }
 setInterval(adoptCur,800); addEventListener("storage",adoptCur); document.addEventListener("visibilitychange",adoptCur);
+/* A window of the radio can stay open for days (the app's wheel window lives inside its background service and loads the page once).
+   When the radio page has been updated, reload it, so an old version never keeps sending old commands. Checks the page itself
+   (GitHub Pages, never Spotify), at most every 5 min; never while this window's own player is playing. */
+let verChecked=0;
+async function updateIfNew(){
+  if(Date.now()-verChecked<5*60e3) return; verChecked=Date.now();
+  try{
+    if(typeof player!=="undefined"&&player&&sdkOK){ const s=await player.getCurrentState(); if(s&&!s.paused) return; }
+    const r=await fetch(location.pathname+"?v="+Date.now(),{cache:"no-store"}); if(!r.ok) return;
+    const m=/const BUILD="([^"]+)"/.exec(await r.text());
+    if(m&&m[1]!==BUILD){
+      dlog("radio page updated ("+BUILD+" → "+m[1]+"): reloading");
+      const ov=new URLSearchParams(location.search).get("overlay")==="1";
+      setTimeout(()=>location.replace(location.pathname+"?"+(ov?"overlay=1&":"")+"v="+Date.now()+location.hash),200);
+    }
+  }catch{}
+}
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden) updateIfNew(); });
 function step(d){ const n=stations.length; tune((((current===null?(d>0?-1:0):current)+d)%n+n)%n); }
 /* mute (the radio keeps running on the live clock; you just can't hear it) */
 let muted=false;
@@ -1001,7 +1019,7 @@ async function bootOverlay(){
   addEventListener("pointerup",e=>arm(pointToIndex(e,true)<0?150:1500),true);   // lifted on a station: 1.5 s; lifted in the middle (nothing selected): almost instantly
   addEventListener("pointercancel",()=>arm(150),true);
   window.ovOpen=idle=>{ clearTimeout(ovTimer); adoptCur(); if(!devId) refreshDevices(true); if(idle===true) arm(4500); document.documentElement.classList.add("open"); setHot(-1); hubStation(current===null?-1:current); };
-  window.ovClose=()=>{ clearTimeout(ovTimer); stick=false; pressed=false; setHot(-1); document.documentElement.classList.remove("open"); };
+  window.ovClose=()=>{ clearTimeout(ovTimer); stick=false; pressed=false; setHot(-1); document.documentElement.classList.remove("open"); updateIfNew(); };
   document.title="overlay-ready";
 }
 (async function boot(){
