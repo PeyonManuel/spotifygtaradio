@@ -181,7 +181,7 @@
 <script>
 "use strict";
 /* ---------- config / helpers ---------- */
-const SCOPES = "streaming user-read-email user-read-private playlist-read-private playlist-read-collaborative user-modify-playback-state user-read-playback-state";
+const SCOPES = "streaming user-read-email user-read-private playlist-read-private playlist-read-collaborative user-modify-playback-state user-read-playback-state playlist-modify-private playlist-modify-public";
 const PAGE = location.origin + location.pathname;
 // Inside the Android app, login happens in Chrome (so "Continue with Google" works) and comes back through this app link.
 const NATIVE = !!window.GtaNative;     // set by the Android app's own WebView
@@ -207,7 +207,7 @@ addEventListener("error",e=>showErr("Error: "+e.message));
 addEventListener("unhandledrejection",e=>showErr("Error: "+((e.reason&&e.reason.message)||e.reason)));
 
 /* ---------- debug log: Spotify requests + answers and the radio's decisions, shared by the app window and the overlay window ---------- */
-const BUILD="2026-11-02 no-flush";
+const BUILD="2026-11-02 station-playlists";
 function dlog(m){
   try{
     const l=LS.get("dbglog",[]), t=new Date();
@@ -247,7 +247,7 @@ async function tokenRequest(params){
     headers:{"Content-Type":"application/x-www-form-urlencoded"},
     body:new URLSearchParams({ client_id:LS.get("cid"), ...params }) });
   const j = await r.json(); if(!r.ok) throw new Error(j.error_description||j.error);
-  LS.set("tok", { access:j.access_token, refresh:j.refresh_token || (LS.get("tok")||{}).refresh, exp:Date.now()+j.expires_in*1000-60000 });
+  LS.set("tok", { access:j.access_token, refresh:j.refresh_token || (LS.get("tok")||{}).refresh, exp:Date.now()+j.expires_in*1000-60000, scope:j.scope||(LS.get("tok")||{}).scope||"" });
 }
 async function getToken(){
   const t = LS.get("tok"); if(!t) throw new Error("not logged in");
@@ -349,7 +349,7 @@ const boxes=()=>[...document.querySelectorAll("#plist input")];
 async function loadPlaylists(){
   me = await api("GET","/me");
   let url="/me/playlists?limit=50"; playlists=[];
-  while(url){ const j=await api("GET",url); playlists.push(...j.items.filter(Boolean)); url=j.next; }
+  while(url){ const j=await api("GET",url); playlists.push(...j.items.filter(p=>p&&!isMirror(p))); url=j.next; }
   const genre=new Set(pickGenre(playlists).map(p=>p.id)), useGenre=genre.size>0;
   const list=$("plist"); list.innerHTML="";
   playlists.forEach(p=>{
@@ -669,58 +669,108 @@ async function pump(){
     }
   } finally { sending=false; }
 }
+/* ---------- station playlists ----------
+   Each station gets its own private Spotify playlist, already in the station's running order ("📻 The Stone 98.7" …).
+   Tuning = "play that playlist from song N at second S, repeat on". Nothing is ever added to Spotify's queue, so stations
+   can't mix, never run out, and the phone's Spotify app plays them like any other playlist. */
+const isMirror=p=>!!p&&(/gtaradio:/.test(p.description||"")||/^📻 /.test(p.name||""));
+const stationSig=st=>hash(st.tracks.map(t=>t.uri).join(",")).toString(36);
+function mirrorOf(st){ const m=(LS.get("mirrors1",{})||{})[st.id]; return m&&m.id&&m.sig===stationSig(st)?m:null; }
+let mirrorBusy=false, mirrorNote="";   // mirrorNote: stays on screen until the station playlists can be made
+async function ensureMirrors(say){
+  if(mirrorBusy||!stations.length) return; mirrorBusy=true;
+  const map=LS.get("mirrors1",{})||{}, tok=LS.get("tok")||{};
+  const todo=()=>stations.filter(st=>!map[st.id]||!map[st.id].id||map[st.id].sig!==stationSig(st));
+  try{
+    if(!todo().length) return;
+    if(tok.scope&&!/playlist-modify-private/.test(tok.scope)){ mirrorNote="Log out and back in once: the radio needs permission to make its station playlists."; setStatus(mirrorNote); return; }
+    // station playlists made earlier (another browser, before a reset…): reuse them, never make one twice
+    let url="/me/playlists?limit=50";
+    while(url){ const j=await api("GET",url);
+      for(const p of (j&&j.items)||[]){ const m=p&&/gtaradio:([A-Za-z0-9]+)(?::([a-z0-9]+))?/.exec(p.description||""); if(!m) continue;
+        if(!map[m[1]]||!map[m[1]].id) map[m[1]]={id:p.id,sig:m[2]||""}; else if(map[m[1]].id===p.id&&m[2]) map[m[1]].sig=m[2]; }
+      url=j&&j.next; }
+    LS.set("mirrors1",map);
+    const need=todo(); let n=0;
+    for(const st of need){
+      const sig=stationSig(st), name="📻 "+stInfo(st).name, uris=st.tracks.map(t=>t.uri);
+      const desc="GTA Radio station, kept in the station's order by the radio app (edits get overwritten). gtaradio:"+st.id+":"+sig;
+      if(say) say(`Setting up station playlists ${++n}/${need.length}…`);
+      let m=map[st.id];
+      if(!m||!m.id){ const p=await api("POST","/me/playlists",{name,public:false,description:desc}); m=map[st.id]={id:p.id,sig:""}; LS.set("mirrors1",map); }
+      await api("PUT","/playlists/"+m.id+"/items",{uris:uris.slice(0,100)});
+      for(let k=100;k<uris.length;k+=100){ await api("POST","/playlists/"+m.id+"/items",{uris:uris.slice(k,k+100)}); await sleep(150); }
+      await api("PUT","/playlists/"+m.id,{name,description:desc}).catch(()=>{});
+      m.sig=sig; LS.set("mirrors1",map);
+      dlog("station playlist ready: "+name+" ("+uris.length+" songs)");
+    }
+    mirrorNote=""; if(say) say("");
+  }catch(e){
+    dlog("station playlists: "+e.message);
+    if(e.status===401||e.status===403){ mirrorNote="Log out and back in once: the radio needs permission to make its station playlists ("+e.message+")."; setStatus(mirrorNote); }
+    else if(say) say("Couldn't set up station playlists: "+e.message);
+  }finally{ mirrorBusy=false; }
+}
+// start a station: its own playlist when it's ready, otherwise the list of songs (that one can't keep going forever)
+async function playStation(q,st,oa,pos,uris){
+  const m=mirrorOf(st);
+  if(m){
+    try{ await api("PUT","/me/player/play"+q,{ context_uri:"spotify:playlist:"+m.id, offset:{position:oa.idx}, position_ms:pos }); return "context"; }
+    catch(e){ if(e.status===404||e.status===429) throw e; dlog("station playlist start refused ("+e.message+"): sending the song list instead"); }
+  }
+  await api("PUT","/me/player/play"+q,{ uris, position_ms:pos }); return "uris";
+}
+// shuffle off (before starting, so the playlist runs in order) and repeat: whole playlist for a station playlist, off for a song list
+async function shuffleOff(dev,q){ if(shufSet===dev) return; shufSet=dev; await api("PUT","/me/player/shuffle"+q+"&state=false").catch(()=>{ if(shufSet===dev) shufSet=null; }); }
+function setRepeat(dev,q,mode){ const k=dev+"|"+mode; if(modeSet===k) return; modeSet=k; api("PUT","/me/player/repeat"+q+"&state="+(mode==="uris"?"off":"context")).catch(()=>{ if(modeSet===k) modeSet=null; }); }
+let shufSet=null;
 async function sendTune(i,quiet){
   const dev=target(); if(!dev) return;
-  const dv=devices.find(d=>d.id===dev), solo=devId!=="sdk"&&!!dv&&/smartphone|tablet/i.test(dv.type||"");                                // the phone's Spotify app doesn't reliably start uris[0] from a long list: play ONE song first, then queue the rest behind it
-  const st=stations[i], oa=onAir(st);                      // timing is computed NOW, at send time
+  const dv=devices.find(d=>d.id===dev), phoneApp=devId!=="sdk"&&!!dv&&/smartphone|tablet/i.test(dv.type||"");   // the Spotify app on a phone
+  const st=stations[i], oa=onAir(st), mir=mirrorOf(st);   // timing is computed NOW, at send time
   const trk=[]; let span=-oa.offset;
-  for(let k=0;k<(solo?20:60);k++){ const t=st.tracks[(oa.idx+k)%st.tracks.length]; trk.push(t); span+=t.dur; }
+  for(let k=0;k<60;k++){ const t=st.tracks[(oa.idx+k)%st.tracks.length]; trk.push(t); span+=t.dur; }
   const uris=trk.map(t=>t.uri);
-  queueEnd=Date.now()+(solo?oa.track.dur-oa.offset:span);   // when the queued songs run out (solo: grows as the rest gets queued)
   const pos=Math.max(0,Math.min(Math.floor(oa.offset+LAG), oa.track.dur-1500));
   const q="?device_id="+encodeURIComponent(dev);
   const seq=++tuneSeq; expectUri=uris[0];
   try{
-    if(solo) await playOnPhone(dev,q,st,uris[0],pos);
-    else await api("PUT","/me/player/play"+q,{ uris, position_ms:pos });
+    let mode;
+    if(phoneApp) await activate(dev);
+    await shuffleOff(dev,q);
+    if(phoneApp&&!mir){ dlog("station playlist not ready yet: starting the original playlist at this song"); await playOnPhone(dev,q,st,uris[0],pos); mode="phone"; }
+    else{
+      try{ mode=await playStation(q,st,oa,pos,uris); }
+      catch(e){ if(!(phoneApp&&e.status===404)) throw e; dlog("still \"no active device\": handing playback to the phone again"); await transfer(dev); await sleep(1200); mode=await playStation(q,st,oa,pos,uris); }
+    }
+    queueEnd = mode==="uris" ? Date.now()+span : mode==="phone" ? Date.now()+oa.track.dur-oa.offset : Infinity;
     if(i!==current) return;                                // you already moved on; the next request is queued
     lastTune=Date.now(); tuneOK=true;
-    if(solo) queueBehind(trk,seq,q);
     if(devId!=="sdk"&&!quiet) waitForStart(uris[0],seq);
-    if(modeSet!==dev){ modeSet=dev;                        // shuffle/repeat off: once per device is enough
-      api("PUT","/me/player/shuffle"+q+"&state=false").catch(()=>{ if(modeSet===dev) modeSet=null; });
-      api("PUT","/me/player/repeat"+q+"&state=off").catch(()=>{}); }
-    setStatus("");
+    setRepeat(dev,q,mode);
+    setStatus(mirrorNote);
   }catch(e){
     if(!quiet&&i===current) stopStatic(true);
     if(e.status===404&&i===current&&!waking&&Date.now()-lastWake>15000){ devId=null; wakeAndRetune(i,quiet); return; }   // "no active device": wake Spotify and retry
     setStatus("Couldn't tune: "+e.message+(e.status===404?" Open Spotify on that device, then try again.":"")); }
 }
-// The phone's Spotify app: first make it the active device (commands to a phone that isn't active fail with "no active device"),
-// then start the station's playlist at the on-air song (a playlist start is what the Spotify app handles most reliably).
-async function playOnPhone(dev,q,st,uri,pos){
-  const transfer=()=>api("PUT","/me/player",{ device_ids:[dev], play:false }).catch(()=>{});
+// the phone's Spotify app only takes commands once it's the active device
+const transfer=dev=>api("PUT","/me/player",{ device_ids:[dev], play:false }).catch(()=>{});
+async function activate(dev){
   const d=devices.find(x=>x.id===dev);
-  if(!d||!d.is_active){ dlog("the phone isn't the active device: handing playback to it"); await transfer(); await sleep(800); }
+  if(!d||!d.is_active){ dlog("the phone isn't the active device: handing playback to it"); await transfer(dev); await sleep(800); }
+}
+// no station playlist yet (first run, or no permission): start the station's original playlist at the on-air song.
+// Only this song is in sync; after it the phone follows the original playlist's order. Nothing gets queued.
+async function playOnPhone(dev,q,st,uri,pos){
   const ctx={ context_uri:"spotify:playlist:"+st.id, offset:{uri}, position_ms:pos };
   const single=()=>api("PUT","/me/player/play"+q,{ uris:[uri], position_ms:pos });   // e.g. the song isn't in the playlist any more
   try{ await api("PUT","/me/player/play"+q,ctx); }
   catch(e){
     if(e.status!==404){ dlog("playlist start refused: playing the song on its own"); await single(); return; }
-    dlog("still \"no active device\": handing playback to the phone again"); await transfer(); await sleep(1200);                    // still "no active device": hand playback to the phone and try once more
+    dlog("still \"no active device\": handing playback to the phone again"); await transfer(dev); await sleep(1200);
     try{ await api("PUT","/me/player/play"+q,ctx); } catch(e2){ if(e2.status===404) throw e2; await single(); }
   }
-}
-// queue the songs after the first one, one request each (stops quietly if you tune somewhere else meanwhile)
-async function queueBehind(trk,seq,q){
-  for(let k=1;k<trk.length;k++){
-    if(seq!==tuneSeq) return;
-    try{ await api("POST","/me/player/queue"+q+"&uri="+encodeURIComponent(trk[k].uri)); }catch(e){ dlog("queueing stopped after "+(k-1)+" songs: "+e.message); return; }
-    if(seq!==tuneSeq) return;
-    queueEnd+=trk[k].dur;
-    await sleep(200);
-  }
-  dlog("queued the next "+(trk.length-1)+" songs");
 }
 /* the app page and the overlay page are two windows of the same app: they tell each other which station is tuned (screen only, no extra Spotify call) */
 let curSeen=0;
@@ -909,7 +959,7 @@ $("refPl").onclick=()=>{ LS.del("cache3"); location.hash=""; location.reload(); 
 $("chPl").onclick=()=>{ location.hash="#pick"; location.reload(); };
 $("out").onclick=()=>{ LS.del("tok"); LS.del("cache3"); location.hash=""; location.reload(); };
 
-function enterRadio(){ show("radio"); buildWheel(); setupMediaSession(); startPlayer(); refreshDevices(true); updatePP(); adoptCur(); ovInit(); }
+function enterRadio(){ show("radio"); buildWheel(); setupMediaSession(); startPlayer(); refreshDevices(true); updatePP(); adoptCur(); ovInit(); if(!OVERLAY) setTimeout(()=>ensureMirrors(setStatus),2500); }
 /* Android app only: the "over other apps" wheel (swipe in from the right edge of the screen, anywhere) */
 let ovDone=false;
 async function ovInit(){
