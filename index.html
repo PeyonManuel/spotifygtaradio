@@ -551,13 +551,15 @@ async function pump(){
 async function flushStaleQueue(uris,seq){
   let skipped=0;
   try{
-    for(let round=0;round<5;round++){
+    for(let round=0;round<4;round++){
       const j=await api("GET","/me/player/queue"); const qq=(j&&j.queue)||[];
       let stale=qq.findIndex(t=>t&&(t.uri===uris[1]||(t.linked_from&&t.linked_from.uri===uris[1])));
       if(stale===0||!qq.length) break;
       if(stale<0) stale=qq.length;                          // the station's songs aren't even in view yet: all of it is leftover
       if(round===0&&devId==="sdk"&&player){ try{ await player.setVolume(0); }catch{} }
-      for(let k=0;k<stale&&k<25;k++){ if(seq!==tuneSeq) return skipped; await api("POST","/me/player/next"+(devId&&devId!=="sdk"?"?device_id="+encodeURIComponent(devId):"")).catch(()=>{}); skipped++; await sleep(120); }
+      if(seq!==tuneSeq) return skipped;
+      const nx=()=>api("POST","/me/player/next"+(devId&&devId!=="sdk"?"?device_id="+encodeURIComponent(devId):"")).catch(()=>{});
+      await Promise.all(Array.from({length:Math.min(stale,50)},nx)); skipped+=Math.min(stale,50);   // all the skips at once, not one by one
     }
   }catch(e){ dlog("clearing leftover queue stopped: "+e.message); }
   return skipped;
