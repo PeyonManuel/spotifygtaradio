@@ -177,7 +177,6 @@ const LS = {
   set:(k,v)=>{ try{ localStorage.setItem(k,JSON.stringify(v)); return true; }catch{ return false; } },
   del:k=>{ try{ localStorage.removeItem(k); }catch{} }
 };
-const dlog=()=>{};
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 const fmt = ms => { const s=Math.max(0,Math.floor(ms/1000)); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); };
 function show(id){ document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on")); $(id).classList.add("on"); }
@@ -546,23 +545,7 @@ async function pump(){
     }
   } finally { sending=false; }
 }
-// Spotify has no "clear queue" call, and songs left in its queue (from earlier tunes) play BEFORE the new station's songs.
-// So after a tune: look at what Spotify will play next; anything ahead of the station's 2nd song is leftover. Skip those silently, then start the station again.
-async function flushStaleQueue(uris,seq){
-  let skipped=0;
-  try{
-    for(let round=0;round<5;round++){
-      const j=await api("GET","/me/player/queue"); const qq=(j&&j.queue)||[];
-      let stale=qq.findIndex(t=>t&&(t.uri===uris[1]||(t.linked_from&&t.linked_from.uri===uris[1])));
-      if(stale===0||!qq.length) break;
-      if(stale<0) stale=qq.length;                          // the station's songs aren't even in view yet: all of it is leftover
-      if(round===0&&devId==="sdk"&&player){ try{ await player.setVolume(0); }catch{} }
-      for(let k=0;k<stale&&k<25;k++){ if(seq!==tuneSeq) return skipped; await api("POST","/me/player/next"+(devId&&devId!=="sdk"?"?device_id="+encodeURIComponent(devId):"")).catch(()=>{}); skipped++; await sleep(120); }
-    }
-  }catch(e){ dlog("clearing leftover queue stopped: "+e.message); }
-  return skipped;
-}
-async function sendTune(i,quiet,noFlush){
+async function sendTune(i,quiet){
   const dev=target(); if(!dev) return;
   const st=stations[i], oa=onAir(st);                      // timing is computed NOW, at send time
   const uris=[]; let span=-oa.offset;
@@ -575,7 +558,6 @@ async function sendTune(i,quiet,noFlush){
     await api("PUT","/me/player/play"+q,{ uris, position_ms:pos });
     if(i!==current) return;                                // you already moved on; the next request is queued
     lastTune=Date.now();
-    if(!noFlush){ const n=await flushStaleQueue(uris,seq); if(n){ dlog("cleared "+n+" leftover queued songs"); if(seq!==tuneSeq||i!==current) return; await sendTune(i,quiet,true); applyVolume(); return; } }
     if(devId!=="sdk"&&!quiet) waitForStart(uris[0],seq);
     if(modeSet!==dev){ modeSet=dev;                        // shuffle/repeat off: once per device is enough
       api("PUT","/me/player/shuffle"+q+"&state=false").catch(()=>{ if(modeSet===dev) modeSet=null; });

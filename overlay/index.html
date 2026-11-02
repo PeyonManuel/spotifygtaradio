@@ -207,7 +207,7 @@ addEventListener("error",e=>showErr("Error: "+e.message));
 addEventListener("unhandledrejection",e=>showErr("Error: "+((e.reason&&e.reason.message)||e.reason)));
 
 /* ---------- debug log: Spotify requests + answers and the radio's decisions, shared by the app window and the overlay window ---------- */
-const BUILD="2026-11-02 clear-queue";
+const BUILD="2026-10-28 no-auto-sync";
 function dlog(m){
   try{
     const l=LS.get("dbglog",[]), t=new Date();
@@ -669,23 +669,7 @@ async function pump(){
     }
   } finally { sending=false; }
 }
-// Spotify has no "clear queue" call, and songs left in its queue (from earlier tunes) play BEFORE the new station's songs.
-// So after a tune: look at what Spotify will play next; anything ahead of the station's 2nd song is leftover. Skip those silently, then start the station again.
-async function flushStaleQueue(uris,seq){
-  let skipped=0;
-  try{
-    for(let round=0;round<5;round++){
-      const j=await api("GET","/me/player/queue"); const qq=(j&&j.queue)||[];
-      let stale=qq.findIndex(t=>t&&(t.uri===uris[1]||(t.linked_from&&t.linked_from.uri===uris[1])));
-      if(stale===0||!qq.length) break;
-      if(stale<0) stale=qq.length;                          // the station's songs aren't even in view yet: all of it is leftover
-      if(round===0&&devId==="sdk"&&player){ try{ await player.setVolume(0); }catch{} }
-      for(let k=0;k<stale&&k<25;k++){ if(seq!==tuneSeq) return skipped; await api("POST","/me/player/next"+(devId&&devId!=="sdk"?"?device_id="+encodeURIComponent(devId):"")).catch(()=>{}); skipped++; await sleep(120); }
-    }
-  }catch(e){ dlog("clearing leftover queue stopped: "+e.message); }
-  return skipped;
-}
-async function sendTune(i,quiet,noFlush){
+async function sendTune(i,quiet){
   const dev=target(); if(!dev) return;
   const dv=devices.find(d=>d.id===dev), solo=devId!=="sdk"&&!!dv&&/smartphone|tablet/i.test(dv.type||"");                                // the phone's Spotify app doesn't reliably start uris[0] from a long list: play ONE song first, then queue the rest behind it
   const st=stations[i], oa=onAir(st);                      // timing is computed NOW, at send time
@@ -701,7 +685,6 @@ async function sendTune(i,quiet,noFlush){
     else await api("PUT","/me/player/play"+q,{ uris, position_ms:pos });
     if(i!==current) return;                                // you already moved on; the next request is queued
     lastTune=Date.now(); tuneOK=true;
-    if(!noFlush){ const n=await flushStaleQueue(uris,seq); if(n){ dlog("cleared "+n+" leftover queued songs"); if(seq!==tuneSeq||i!==current) return; await sendTune(i,quiet,true); applyVolume(); return; } }
     if(solo) queueBehind(trk,seq,q);
     if(devId!=="sdk"&&!quiet) waitForStart(uris[0],seq);
     if(modeSet!==dev){ modeSet=dev;                        // shuffle/repeat off: once per device is enough
