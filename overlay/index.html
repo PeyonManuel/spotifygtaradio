@@ -207,7 +207,7 @@ addEventListener("error",e=>showErr("Error: "+e.message));
 addEventListener("unhandledrejection",e=>showErr("Error: "+((e.reason&&e.reason.message)||e.reason)));
 
 /* ---------- debug log: Spotify requests + answers and the radio's decisions, shared by the app window and the overlay window ---------- */
-const BUILD="2026-11-03 in-sync-fallback";
+const BUILD="2026-11-03 song-end-sync";
 function dlog(m){
   try{
     const l=LS.get("dbglog",[]), t=new Date();
@@ -729,6 +729,30 @@ async function playStation(q,st,oa,pos,uris){
 async function shuffleOff(dev,q){ if(shufSet===dev) return; shufSet=dev; await api("PUT","/me/player/shuffle"+q+"&state=false").catch(()=>{ if(shufSet===dev) shufSet=null; }); }
 function setRepeat(dev,q,mode){ const k=dev+"|"+mode; if(modeSet===k) return; modeSet=k; api("PUT","/me/player/repeat"+q+"&state="+(mode==="uris"?"off":"context")).catch(()=>{ if(modeSet===k) modeSet=null; }); }
 let shufSet=null;
+/* End of each song (one check per song, no polling): if this station is still the one picked here and Spotify is still
+   playing this station's music, make sure it's on the station's song (re-sync only if it isn't). If Spotify is paused or
+   playing something that isn't from this station, you moved on outside the radio: leave it alone until you tap a station. */
+let endTimer=null;
+function scheduleSongEnd(i){
+  clearTimeout(endTimer);
+  const st=stations[i]; if(!st) return;
+  const oa=onAir(st), tuneT=(LS.get("curst",{})||{}).t;
+  endTimer=setTimeout(()=>songEnd(i,tuneT,false),oa.track.dur-oa.offset+2500);
+}
+async function songEnd(i,tuneT,retry){
+  if(current!==i||paused) return;
+  if(tuneT&&(LS.get("curst",{})||{}).t!==tuneT) return;                   // another window of the app tuned since: it keeps watch
+  const st=stations[i], oa=onAir(st), tr=order(st), n=tr.length;
+  let d=null; try{ d=await api("GET","/me/player"); }catch{ return; }
+  if(current!==i) return;
+  if(!d||!d.is_playing||!d.item){ dlog("song ended: Spotify isn't playing: leaving it"); return; }
+  const now=[d.item.uri,d.item.linked_from&&d.item.linked_from.uri].filter(Boolean);
+  if(!st._set) st._set=new Set(st.tracks.map(t=>t.uri));
+  if(!now.some(u=>st._set.has(u))){ dlog("song ended: Spotify is playing something else: leaving it"); return; }
+  if(now.includes(oa.track.uri)){ scheduleSongEnd(i); return; }                                  // on the station's song
+  if(!retry&&now.includes(tr[(oa.idx-1+n)%n].uri)){ endTimer=setTimeout(()=>songEnd(i,tuneT,true),4000); return; }   // previous song still finishing
+  dlog("song ended: Spotify is off the station's song: re-sync"); tune(i,{quiet:true});
+}
 async function sendTune(i,quiet){
   const dev=target(); if(!dev) return;
   const dv=devices.find(d=>d.id===dev), phoneApp=devId!=="sdk"&&!!dv&&/smartphone|tablet/i.test(dv.type||"");   // the Spotify app on a phone
@@ -750,6 +774,7 @@ async function sendTune(i,quiet){
     }
     queueEnd = mode==="uris" ? Date.now()+span : mode==="phone" ? Date.now()+oa.track.dur-oa.offset : Infinity;
     if(i!==current) return;                                // you already moved on; the next request is queued
+    scheduleSongEnd(i);
     lastTune=Date.now(); tuneOK=true;
     if(devId!=="sdk"&&!quiet) waitForStart(uris[0],seq);
     setRepeat(dev,q,mode);
