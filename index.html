@@ -178,7 +178,7 @@ const LS = {
   del:k=>{ try{ localStorage.removeItem(k); }catch{} }
 };
 const dlog=m=>console.log("[radio]",m);
-const BUILD="2026-11-02 self-update";   // change on every update: open windows reload themselves when it differs
+const BUILD="2026-11-03 in-sync-fallback";   // change on every update: open windows reload themselves when it differs
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 const fmt = ms => { const s=Math.max(0,Math.floor(ms/1000)); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); };
 function show(id){ document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on")); $(id).classList.add("on"); }
@@ -319,13 +319,13 @@ function shuffled(arr,seedStr){ const a=arr.slice(), r=rng(hash(seedStr)); for(l
 
 /* the station list is cached so the radio opens instantly next time */
 function saveCache(){
-  const ok=LS.set("cache3",{t:Date.now(),list:stations.map(s=>({id:s.id,name:s.name,tr:s.tracks.map(t=>[t.uri,t.name,t.artist,t.dur])}))});
+  const ok=LS.set("cache3",{t:Date.now(),list:stations.map(s=>({id:s.id,name:s.name,tr:s.tracks.map(t=>[t.uri,t.name,t.artist,t.dur,t.o])}))});
   if(!ok) console.warn("station cache too large, skipped");
 }
 function loadCache(){
   const c=LS.get("cache3",null);
   if(!c||!c.list||!c.list.length||Date.now()-c.t>12*3600e3) return null;
-  try{ return c.list.map(s=>{ const tracks=s.tr.map(a=>({uri:a[0],name:a[1],artist:a[2],dur:a[3]})); return {id:s.id,name:s.name,tracks,total:tracks.reduce((x,t)=>x+t.dur,0)}; }); }
+  try{ return c.list.map(s=>{ const tracks=s.tr.map(a=>({uri:a[0],name:a[1],artist:a[2],dur:a[3],o:a[4]})); return {id:s.id,name:s.name,tracks,plain:plainOrder(tracks),total:tracks.reduce((x,t)=>x+t.dur,0)}; }); }
   catch{ return null; }
 }
 
@@ -336,7 +336,7 @@ async function buildRadio(ids, say){
     say(`Loading ${i+1}/${ids.length}: ${pl.name}`);
     try{
       const tr=await fetchTracks(pl);
-      if(tr.length){ const s=shuffled(tr,pl.id); stations.push({id:pl.id,name:pl.name,tracks:s,total:s.reduce((a,t)=>a+t.dur,0)}); }
+      if(tr.length){ tr.forEach((t,k)=>t.o=k); const s=shuffled(tr,pl.id); stations.push({id:pl.id,name:pl.name,tracks:s,plain:plainOrder(s),total:s.reduce((a,t)=>a+t.dur,0)}); }
     }catch(e){ console.warn("skip",pl.name,e); say(`Skipped ${pl.name}: ${e.message}`); await sleep(800); }
   }
   if(!stations.length){ say("No playable tracks found."); return false; }
@@ -355,10 +355,14 @@ $("build").onclick=async ()=>{
 };
 
 /* ---------- the radio clock ---------- */
+// Running order: the station's own shuffle when its station playlist is ready; otherwise the original playlist's order,
+// because that's the order the phone's Spotify app keeps playing after the first song (so the radio stays in sync).
+function plainOrder(tr){ return tr.every(t=>typeof t.o==="number")?tr.slice().sort((a,b)=>a.o-b.o):null; }
+function order(st){ return (typeof mirrorOf==="function"&&mirrorOf(st))||!st.plain?st.tracks:st.plain; }
 function onAir(st, at=Date.now()){
-  let t=(at-EPOCH)%st.total, i=0;
-  while(t>=st.tracks[i].dur){ t-=st.tracks[i].dur; i++; }
-  return { idx:i, offset:t, track:st.tracks[i] };
+  const tr=order(st); let t=(at-EPOCH)%st.total, i=0;
+  while(t>=tr[i].dur){ t-=tr[i].dur; i++; }
+  return { idx:i, offset:t, track:tr[i] };
 }
 
 /* ---------- playback: in this browser (desktop) or on a Spotify device (phone, speaker, ...) ---------- */
@@ -552,7 +556,7 @@ async function pump(){
    Tuning = "play that playlist from song N at second S, repeat on". Nothing is ever added to Spotify's queue, so stations
    can't mix, never run out, and the phone's Spotify app plays them like any other playlist. */
 const isMirror=p=>!!p&&(/gtaradio:/.test(p.description||"")||/^📻 /.test(p.name||""));
-const stationSig=st=>hash(st.tracks.map(t=>t.uri).join(",")).toString(36);
+const stationSig=st=>st._sig||(st._sig=hash(st.tracks.map(t=>t.uri).join(",")).toString(36));
 function mirrorOf(st){ const m=(LS.get("mirrors1",{})||{})[st.id]; return m&&m.id&&m.sig===stationSig(st)?m:null; }
 let mirrorBusy=false, mirrorNote="";   // mirrorNote: stays on screen until the station playlists can be made
 async function ensureMirrors(say){
@@ -585,6 +589,7 @@ async function ensureMirrors(say){
     mirrorNote=""; if(say) say("");
   }catch(e){
     dlog("station playlists: "+e.message);
+    if(stations.some(st=>!st.plain)) dlog("no original order saved yet: tap Refresh playlists once");
     if(e.status===401||e.status===403){ mirrorNote="Log out and back in once: the radio needs permission to make its station playlists ("+e.message+")."; setStatus(mirrorNote); }
     else if(say) say("Couldn't set up station playlists: "+e.message);
   }finally{ mirrorBusy=false; }
@@ -606,7 +611,7 @@ async function sendTune(i,quiet){
   const dev=target(); if(!dev) return;
   const st=stations[i], oa=onAir(st);                      // timing is computed NOW, at send time
   const uris=[]; let span=-oa.offset;
-  for(let k=0;k<60;k++){ const t=st.tracks[(oa.idx+k)%st.tracks.length]; uris.push(t.uri); span+=t.dur; }
+  for(let k=0;k<60;k++){ const tr=order(st), t=tr[(oa.idx+k)%tr.length]; uris.push(t.uri); span+=t.dur; }
   const pos=Math.max(0,Math.min(Math.floor(oa.offset+LAG), oa.track.dur-1500));
   const q="?device_id="+encodeURIComponent(dev);
   const seq=++tuneSeq; expectUri=uris[0];
@@ -712,7 +717,7 @@ async function guardCheck(){
   if(current===null||paused||Date.now()-lastTune<9000) return;
   if(Date.now()>queueEnd-20000){ tune(current,{quiet:true}); return; }          // refill the queue before it empties
   const st=stations[current], oa=onAir(st), n=st.tracks.length;
-  const near=new Set([-1,0,1].map(d=>st.tracks[(oa.idx+d+n)%n].uri));           // previous / current / next: drift is fine
+  const near=new Set([-1,0,1].map(d=>order(st)[(oa.idx+d+n)%n].uri));           // previous / current / next: drift is fine
   try{
     let now=null;
     if(devId==="sdk"&&player){
