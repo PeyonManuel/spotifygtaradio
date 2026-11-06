@@ -207,7 +207,7 @@ addEventListener("error",e=>showErr("Error: "+e.message));
 addEventListener("unhandledrejection",e=>showErr("Error: "+((e.reason&&e.reason.message)||e.reason)));
 
 /* ---------- debug log: Spotify requests + answers and the radio's decisions, shared by the app window and the overlay window ---------- */
-const BUILD="2026-11-03 song-end-sync";
+const BUILD="2026-11-06 shuffled-fallback";
 function dlog(m){
   try{
     const l=LS.get("dbglog",[]), t=new Date();
@@ -424,7 +424,7 @@ $("build").onclick=async ()=>{
 // Running order: the station's own shuffle when its station playlist is ready; otherwise the original playlist's order,
 // because that's the order the phone's Spotify app keeps playing after the first song (so the radio stays in sync).
 function plainOrder(tr){ return tr.every(t=>typeof t.o==="number")?tr.slice().sort((a,b)=>a.o-b.o):null; }
-function order(st){ return (typeof mirrorOf==="function"&&mirrorOf(st))||!st.plain?st.tracks:st.plain; }
+function order(st){ return st.tracks; }   // always the station's own shuffled running order
 function onAir(st, at=Date.now()){
   const tr=order(st); let t=(at-EPOCH)%st.total, i=0;
   while(t>=tr[i].dur){ t-=tr[i].dur; i++; }
@@ -726,7 +726,9 @@ async function playStation(q,st,oa,pos,uris){
   await api("PUT","/me/player/play"+q,{ uris, position_ms:pos }); return "uris";
 }
 // shuffle off (before starting, so the playlist runs in order) and repeat: whole playlist for a station playlist, off for a song list
-async function shuffleOff(dev,q){ if(shufSet===dev) return; shufSet=dev; await api("PUT","/me/player/shuffle"+q+"&state=false").catch(()=>{ if(shufSet===dev) shufSet=null; }); }
+async function setShuffle(dev,q,on){ const k=dev+"|"+on; if(shufSet===k) return; shufSet=k; await api("PUT","/me/player/shuffle"+q+"&state="+on).catch(()=>{ if(shufSet===k) shufSet=null; }); }
+const shuffleOff=(dev,q)=>setShuffle(dev,q,false);
+let tuneMode=null;   // "context" station playlist · "uris" song list · "phone" original playlist with Spotify's shuffle
 function setRepeat(dev,q,mode){ const k=dev+"|"+mode; if(modeSet===k) return; modeSet=k; api("PUT","/me/player/repeat"+q+"&state="+(mode==="uris"?"off":"context")).catch(()=>{ if(modeSet===k) modeSet=null; }); }
 let shufSet=null;
 /* End of each song (one check per song, no polling): if this station is still the one picked here and Spotify is still
@@ -749,7 +751,7 @@ async function songEnd(i,tuneT,retry){
   const now=[d.item.uri,d.item.linked_from&&d.item.linked_from.uri].filter(Boolean);
   if(!st._set) st._set=new Set(st.tracks.map(t=>t.uri));
   if(!now.some(u=>st._set.has(u))){ dlog("song ended: Spotify is playing something else: leaving it"); return; }
-  if(now.includes(oa.track.uri)){ scheduleSongEnd(i); return; }                                  // on the station's song
+  if(tuneMode==="phone"||now.includes(oa.track.uri)){ scheduleSongEnd(i); return; }   // original-playlist route: Spotify shuffles, any song of the station is right                                  // on the station's song
   if(!retry&&now.includes(tr[(oa.idx-1+n)%n].uri)){ endTimer=setTimeout(()=>songEnd(i,tuneT,true),4000); return; }   // previous song still finishing
   dlog("song ended: Spotify is off the station's song: re-sync"); tune(i,{quiet:true});
 }
@@ -767,12 +769,13 @@ async function sendTune(i,quiet){
     let mode;
     if(phoneApp) await activate(dev);
     await shuffleOff(dev,q);
-    if(phoneApp&&!mir){ dlog("station playlist not ready yet: starting the original playlist at this song"); await playOnPhone(dev,q,st,uris[0],pos); mode="phone"; }
+    if(phoneApp&&!mir){ dlog("no station playlist: starting the original playlist at this song, then Spotify shuffles it"); await playOnPhone(dev,q,st,uris[0],pos); mode="phone"; setShuffle(dev,q,true); }
     else{
       try{ mode=await playStation(q,st,oa,pos,uris); }
       catch(e){ if(!(phoneApp&&e.status===404)) throw e; dlog("still \"no active device\": handing playback to the phone again"); await transfer(dev); await sleep(1200); mode=await playStation(q,st,oa,pos,uris); }
     }
     queueEnd = mode==="uris" ? Date.now()+span : mode==="phone" ? Date.now()+oa.track.dur-oa.offset : Infinity;
+    tuneMode=mode;
     if(i!==current) return;                                // you already moved on; the next request is queued
     scheduleSongEnd(i);
     lastTune=Date.now(); tuneOK=true;
