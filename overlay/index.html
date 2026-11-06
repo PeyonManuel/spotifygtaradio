@@ -207,7 +207,7 @@ addEventListener("error",e=>showErr("Error: "+e.message));
 addEventListener("unhandledrejection",e=>showErr("Error: "+((e.reason&&e.reason.message)||e.reason)));
 
 /* ---------- debug log: Spotify requests + answers and the radio's decisions, shared by the app window and the overlay window ---------- */
-const BUILD="2026-11-06 shuffled-fallback";
+const BUILD="2026-11-06 sync-90s";
 function dlog(m){
   try{
     const l=LS.get("dbglog",[]), t=new Date();
@@ -731,30 +731,35 @@ const shuffleOff=(dev,q)=>setShuffle(dev,q,false);
 let tuneMode=null;   // "context" station playlist · "uris" song list · "phone" original playlist with Spotify's shuffle
 function setRepeat(dev,q,mode){ const k=dev+"|"+mode; if(modeSet===k) return; modeSet=k; api("PUT","/me/player/repeat"+q+"&state="+(mode==="uris"?"off":"context")).catch(()=>{ if(modeSet===k) modeSet=null; }); }
 let shufSet=null;
-/* End of each song (one check per song, no polling): if this station is still the one picked here and Spotify is still
-   playing this station's music, make sure it's on the station's song (re-sync only if it isn't). If Spotify is paused or
-   playing something that isn't from this station, you moved on outside the radio: leave it alone until you tap a station. */
-let endTimer=null;
+/* Keeping the station in sync: a check when each song should end, plus one every 90 s (in case a timer got held back while
+   the phone slept). It only acts when this station is still the one picked in the radio AND Spotify is playing one of this
+   station's songs. Paused: does nothing. Playing anything else: you moved on, so it stops watching until you tap a station. */
+let endTimer=null, watching=false, myTuneT=null;
 function scheduleSongEnd(i){
   clearTimeout(endTimer);
   const st=stations[i]; if(!st) return;
-  const oa=onAir(st), tuneT=(LS.get("curst",{})||{}).t;
-  endTimer=setTimeout(()=>songEnd(i,tuneT,false),oa.track.dur-oa.offset+2500);
+  const oa=onAir(st);
+  endTimer=setTimeout(()=>syncCheck("song end"),oa.track.dur-oa.offset+2500);
 }
-async function songEnd(i,tuneT,retry){
-  if(current!==i||paused) return;
-  if(tuneT&&(LS.get("curst",{})||{}).t!==tuneT) return;                   // another window of the app tuned since: it keeps watch
-  const st=stations[i], oa=onAir(st), tr=order(st), n=tr.length;
+async function syncCheck(why){
+  const i=current;
+  if(i===null||!watching||paused||Date.now()-lastTune<20000) return;
+  if(myTuneT&&(LS.get("curst",{})||{}).t!==myTuneT){ watching=false; return; }   // another window of the app tuned since: it keeps watch
+  const st=stations[i];
   let d=null; try{ d=await api("GET","/me/player"); }catch{ return; }
-  if(current!==i) return;
-  if(!d||!d.is_playing||!d.item){ dlog("song ended: Spotify isn't playing: leaving it"); return; }
+  if(current!==i||!watching) return;
+  scheduleSongEnd(i);
+  if(!d||!d.is_playing||!d.item) return;                                          // paused: leave it
   const now=[d.item.uri,d.item.linked_from&&d.item.linked_from.uri].filter(Boolean);
   if(!st._set) st._set=new Set(st.tracks.map(t=>t.uri));
-  if(!now.some(u=>st._set.has(u))){ dlog("song ended: Spotify is playing something else: leaving it"); return; }
-  if(tuneMode==="phone"||now.includes(oa.track.uri)){ scheduleSongEnd(i); return; }   // original-playlist route: Spotify shuffles, any song of the station is right                                  // on the station's song
-  if(!retry&&now.includes(tr[(oa.idx-1+n)%n].uri)){ endTimer=setTimeout(()=>songEnd(i,tuneT,true),4000); return; }   // previous song still finishing
-  dlog("song ended: Spotify is off the station's song: re-sync"); tune(i,{quiet:true});
+  if(!now.some(u=>st._set.has(u))){ watching=false; dlog("Spotify is playing something else: the radio leaves it alone until you tap a station"); return; }
+  const oa=onAir(st), tr=order(st), n=tr.length;
+  if(now.includes(oa.track.uri)) return;                                          // in sync
+  const near=(now.includes(tr[(oa.idx-1+n)%n].uri)&&oa.offset<6000)||(now.includes(tr[(oa.idx+1)%n].uri)&&oa.track.dur-oa.offset<6000);
+  if(near) return;                                                                // just a few seconds off around a song change
+  dlog(why+": Spotify is on another song of the station: re-sync"); tune(i,{quiet:true});
 }
+setInterval(()=>syncCheck("90 s check"),90000);
 async function sendTune(i,quiet){
   const dev=target(); if(!dev) return;
   const dv=devices.find(d=>d.id===dev), phoneApp=devId!=="sdk"&&!!dv&&/smartphone|tablet/i.test(dv.type||"");   // the Spotify app on a phone
@@ -777,6 +782,7 @@ async function sendTune(i,quiet){
     queueEnd = mode==="uris" ? Date.now()+span : mode==="phone" ? Date.now()+oa.track.dur-oa.offset : Infinity;
     tuneMode=mode;
     if(i!==current) return;                                // you already moved on; the next request is queued
+    watching=true; myTuneT=(LS.get("curst",{})||{}).t||null;
     scheduleSongEnd(i);
     lastTune=Date.now(); tuneOK=true;
     if(devId!=="sdk"&&!quiet) waitForStart(uris[0],seq);
